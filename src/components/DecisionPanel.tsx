@@ -168,14 +168,18 @@ export default function DecisionPanel() {
     if (!activeConversation || t.length < 3 || st.length < 10) return;
     setBusy(true);
     setError(null);
-    const err = await createDecision({ title: t, statement: st });
+    const { error, decisionId } = await createDecision({ title: t, statement: st });
     setBusy(false);
-    if (err) {
-      setError(err);
+    if (error) {
+      setError(error);
       return;
     }
     reset();
     setCreating(false);
+    // Land straight on the decision that was just drafted: the list is one
+    // click away from here, but until now a new draft vanished until the
+    // author backed out and found it themselves.
+    if (decisionId) setDetailId(decisionId);
   };
 
   const handleToggleClaim = async (claimId: string) => {

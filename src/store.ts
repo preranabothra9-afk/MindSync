@@ -190,7 +190,11 @@ export interface AppState {
    * Creates a decision. Resolves to the new decision's id, or null if the
    * server refused.
    */
-  createDecision: (input: { title: string; statement: string; claimIds?: string[]; requiredApproverIds?: string[] }) => Promise<string | null>;
+  // Resolves with a discriminated result rather than a bare string: a
+  // successful create returns the new decision's id, which is itself a
+  // non-empty string, so returning "error-or-id" would let a real id be
+  // mistaken for a failure.
+  createDecision: (input: { title: string; statement: string; claimIds?: string[]; requiredApproverIds?: string[] }) => Promise<{ error: string | null; decisionId: string | null }>;
   /** Edits a draft decision's title or statement. Returns null on success or the refusal reason. */
   editDecision: (decisionId: string, patch: { title?: string; statement?: string }) => Promise<string | null>;
   /** Sets the claims a draft decision rests on. Returns null on success or the refusal reason. */
@@ -1632,7 +1636,7 @@ export const useStore = create<AppState>((set, get) => {
 
     createDecision: async (input) => {
       const conv = useChatStore.getState().activeConversation;
-      if (!conv) return null;
+      if (!conv) return { error: 'No room selected', decisionId: null };
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions`, {
           method: 'POST',
@@ -1646,16 +1650,16 @@ export const useStore = create<AppState>((set, get) => {
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          return data?.error ?? 'Failed to create the decision';
+          return { error: data?.error ?? 'Failed to create the decision', decisionId: null };
         }
         const data = await res.json();
         // The socket echo will refresh the list; fetch anyway so a quiet room
         // (no other clients) still updates immediately.
         await get().fetchDecisions(conv.id);
-        return data.decision?.id ?? null;
+        return { error: null, decisionId: data.decision?.id ?? null };
       } catch (err) {
         console.error('Error creating decision:', err);
-        return 'Failed to create the decision';
+        return { error: 'Failed to create the decision', decisionId: null };
       }
     },
 

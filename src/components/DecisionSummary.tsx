@@ -95,7 +95,7 @@ export default function DecisionSummaryView({
         onClick={onClose}
       >
         <div
-          className="w-full max-w-[680px] h-[min(88vh, 820px)] flex flex-col rounded-2xl bg-panel-2 border border-line-2 shadow-2xl overflow-hidden"
+          className="w-full max-w-[680px] h-[min(88vh,820px)] flex flex-col rounded-2xl bg-panel-2 border border-line-2 shadow-2xl overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}

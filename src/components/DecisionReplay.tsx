@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import {
   Scale,
@@ -122,8 +122,18 @@ function EventRow({
 }) {
   const Icon = KIND_ICON[event.kind] ?? History;
   const tone = KIND_TONE[event.kind] ?? 'text-faint';
+  const ref = useRef<HTMLButtonElement>(null);
+
+  // Follow the active step. Scrubbing with the arrows or the slider should
+  // never leave the highlighted event scrolled out of sight — otherwise
+  // stepping forward through a long timeline looks like nothing is happening.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       className={`w-full flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
@@ -387,7 +397,7 @@ export default function DecisionReplay({
         onClick={onClose}
       >
         <div
-          className="w-full max-w-[960px] h-[min(88vh, 760px)] flex flex-col rounded-2xl bg-panel-2 border border-line-2 shadow-2xl overflow-hidden"
+          className="w-full max-w-[960px] h-[min(88vh,760px)] flex flex-col rounded-2xl bg-panel-2 border border-line-2 shadow-2xl overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -416,8 +426,11 @@ export default function DecisionReplay({
             <EmptyState />
           ) : (
             <>
-              {/* Body: rail + state */}
-              <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr] divide-x divide-line">
+              {/* Body: rail + state. The explicit `grid-rows-[1fr]` is what
+                  makes these two panels scroll rather than grow: it pins the
+                  row to the card's height, so overflow-y-auto always has a
+                  finite box to scroll inside. */}
+              <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr] grid-rows-[1fr] divide-x divide-line">
                 {/* Rail */}
                 <div className="min-h-0 overflow-y-auto py-2 px-2 space-y-0.5">
                   {events.map((e, i) => (
