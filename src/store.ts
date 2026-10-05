@@ -877,8 +877,18 @@ export const useStore = create<AppState>((set, get) => {
         });
         const data = await res.json();
         if (res.ok) {
-          useAuthStore.setState({ user: data.user, token: data.token, authError: null });
-          
+          // A successful login resolves any pending verification: either this is
+          // the account that was awaiting confirmation, or the user signed into
+          // a different, already-verified account. Either way the "verify your
+          // email first" notice on the login page must not outlive the session.
+          useAuthStore.setState({
+            user: data.user,
+            token: data.token,
+            authError: null,
+            pendingVerificationEmail: null,
+            pendingVerificationUrl: null,
+          });
+
           await get().fetchWorkspaces({ autoEnter: false });
           useAuthStore.setState({ isAuthenticating: false });
           return true;

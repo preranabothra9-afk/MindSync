@@ -186,7 +186,10 @@ export default function AuthPortal() {
 
   const goToLogin = () => {
     switchView('login');
-    setPendingVerification(null);
+    // NOTE: deliberately does NOT clear the pending verification. The login
+    // page shows a "verify your email first" notice off this state, so clearing
+    // it here would make the notice disappear exactly when the user needs it.
+    // It is cleared by a successful verification (or a successful login) instead.
     navigateTo('/login');
   };
 
