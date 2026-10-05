@@ -98,7 +98,12 @@ export interface AppState {
   
   // Auth Actions
   login: (email: string, password: string) => Promise<boolean>;
-  register: (name: string, email: string, password: string) => Promise<boolean>;
+  register: (name: string, email: string, password: string) => Promise<{
+    success: boolean;
+    requiresVerification?: boolean;
+    mailFailed?: boolean;
+    verificationUrl?: string;
+  }>;
   logout: () => Promise<void>;
   clearAuthError: () => void;
 
@@ -903,21 +908,28 @@ export const useStore = create<AppState>((set, get) => {
           if (data.requiresVerification) {
             useAuthStore.setState({ user: null, token: null, authError: null, isAuthenticating: false });
             get().setPendingVerification?.(data.user?.email || email, data.verificationUrl);
-            return true;
+            return {
+              success: true,
+              requiresVerification: true,
+              // The portal needs to know whether the mail actually left so it can
+              // say "check your inbox" vs "delivery failed, use this link instead".
+              mailFailed: !!data.mailFailed,
+              verificationUrl: data.verificationUrl,
+            };
           }
 
           useAuthStore.setState({ user: data.user, token: data.token, authError: null });
-          
+
           await get().fetchWorkspaces({ autoEnter: false });
           useAuthStore.setState({ isAuthenticating: false });
-          return true;
+          return { success: true, requiresVerification: false };
         } else {
           useAuthStore.setState({ authError: data.error || 'Registration failed', isAuthenticating: false });
-          return false;
+          return { success: false };
         }
       } catch (err) {
         useAuthStore.setState({ authError: 'Network error. Try again.', isAuthenticating: false });
-        return false;
+        return { success: false };
       }
     },
 

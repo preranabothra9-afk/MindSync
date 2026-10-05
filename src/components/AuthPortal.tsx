@@ -104,6 +104,22 @@ export default function AuthPortal() {
     return () => { cancelled = true; };
   }, [view, verifyToken, verifyEmail]);
 
+  // Once the email is confirmed, send the user straight to the sign-in page
+  // rather than leaving them on a success screen they have to click out of.
+  // A short delay keeps the "Email verified" confirmation visible before the
+  // navigation, so the change of page reads as deliberate rather than a flicker.
+  useEffect(() => {
+    if (view !== 'verify' || verifyState !== 'success') return;
+    const timer = setTimeout(() => {
+      setPendingVerification(null);
+      switchView('login');
+      navigateTo('/login');
+    }, 1200);
+    return () => clearTimeout(timer);
+    // switchView/navigateTo are stable store actions; verifyState is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, verifyState]);
+
   const handleResendVerification = async (e: React.FormEvent) => {
     e.preventDefault();
     const target = email.trim() || pendingVerificationEmail;
@@ -196,12 +212,17 @@ export default function AuthPortal() {
     setIsSubmitting(true);
     try {
       if (view === 'register') {
-        const ok = await register(name.trim(), email.trim(), password);
-        // Signup no longer returns a session -- send them to the "check your inbox" state
-        if (ok) {
-          setDevVerifyUrl(pendingVerificationUrl || null);
-          setMailFailed(true);
+        const result = await register(name.trim(), email.trim(), password);
+        // Signup never returns a session: land on the "verification mail sent"
+        // page so the user can confirm before signing in. The URL must move to
+        // /verify-email too, otherwise a refresh drops them back on /register.
+        if (result.success) {
+          setDevVerifyUrl(result.verificationUrl || pendingVerificationUrl || null);
+          // Reflect the real delivery status: "mail sent, check your inbox" when
+          // it left, and the manual-link panel only when it genuinely failed.
+          setMailFailed(!!result.mailFailed);
           switchView('verify');
+          navigateTo('/verify-email');
         }
       } else {
         const ok = await login(email.trim(), password);
@@ -535,18 +556,14 @@ export default function AuthPortal() {
               </p>
             </div>
 
-            {devVerifyUrl && verifyState !== 'success' && (
+            {devVerifyUrl && mailFailed && verifyState !== 'success' && (
               <div className="mt-4 bg-ember/5 border border-ember/20 rounded-lg p-3">
                 <p className="text-[13px] font-mono font-bold uppercase tracking-wider text-ember-soft mb-2">
-                  {mailFailed
-                    ? 'Email delivery failed — manual verification link'
-                    : 'Dev mode — SMTP not configured'}
+                  Email delivery failed — manual verification link
                 </p>
-                {mailFailed && (
-                  <p className="text-[12px] text-faint mb-2 leading-relaxed">
-                    The mail server could not be reached, so the link was not emailed. Use it below to activate your account now.
-                  </p>
-                )}
+                <p className="text-[12px] text-faint mb-2 leading-relaxed">
+                  The mail server could not be reached, so the link was not emailed. Use it below to activate your account now.
+                </p>
                 <p className="text-[13px] text-faint mb-2 break-all">{devVerifyUrl}</p>
                 <a
                   href={devVerifyUrl}
