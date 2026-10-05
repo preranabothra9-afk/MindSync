@@ -27,7 +27,8 @@ import {
   ClaimModel,
   EvidenceModel,
   ClaimRelationModel,
-  TimelineEventModel
+  TimelineEventModel,
+  DecisionModel
 } from './server/database';
 import bcrypt from 'bcryptjs';
 import { generateAccessToken, generateUUID } from './server/auth';
@@ -84,6 +85,34 @@ function drive(
   });
 }
 
+/**
+ * Everything this probe created, recorded the instant it exists.
+ *
+ * A probe must never leave a workspace behind: leaked test rooms are exactly
+ * the kind of residue this project is trying to be rid of. Holding the ids at
+ * module scope lets teardown run whether the run succeeds, throws, or is
+ * interrupted.
+ */
+let fixture: { convId: string; wsId: string; userId: string } | null = null;
+
+async function teardown(): Promise<void> {
+  const f = fixture;
+  if (!f) return;
+  fixture = null;
+  try {
+    await TimelineEventModel.deleteMany({ conversationId: f.convId });
+    await EvidenceModel.deleteMany({ conversationId: f.convId });
+    await ClaimRelationModel.deleteMany({ conversationId: f.convId });
+    await ClaimModel.deleteMany({ conversationId: f.convId });
+    await DecisionModel.deleteMany({ conversationId: f.convId });
+    await ConversationModel.deleteOne({ _id: f.convId });
+    await WorkspaceModel.deleteOne({ _id: f.wsId });
+    await db.deleteUser(f.userId);
+  } catch (err) {
+    console.error('Probe teardown failed:', err);
+  }
+}
+
 async function main(): Promise<void> {
   await connectDB();
   console.log('\n=== Decision Replay probe ===');
@@ -122,6 +151,9 @@ async function main(): Promise<void> {
 
   const token = generateAccessToken(owner as any);
   const base = `/messages/${conv.id}/decisions`;
+
+  // From here on, any failure must still clean up.
+  fixture = { convId: String(conv._id), wsId: String(ws._id), userId: owner.id };
 
   let decisionId: string | null = null;
   let linkedClaim: Claim;
@@ -441,20 +473,23 @@ async function main(): Promise<void> {
   check('reopen keeps the earlier finalization', (replay4.body?.events ?? []).some((e: any) => e.kind === 'decision-finalized'));
 
   // ── cleanup ───────────────────────────────────────────────────────────
-  await TimelineEventModel.deleteMany({ conversationId: conv.id });
-  await EvidenceModel.deleteMany({ conversationId: conv.id });
-  await ClaimRelationModel.deleteMany({ conversationId: conv.id });
-  await ClaimModel.deleteMany({ conversationId: conv.id });
-  await db.deleteDecision(conv.id, decisionId!);
-  await ConversationModel.deleteOne({ _id: conv.id });
-  await WorkspaceModel.deleteOne({ _id: ws.id });
-  await db.deleteUser(owner.id);
+  await teardown();
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('Probe crashed:', err);
+  // Clean up before exiting — a crashed run must not leak a workspace.
+  await teardown();
   process.exit(2);
 });
+
+// Ctrl+C mid-run should not leave the fixtures behind either.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, async () => {
+    await teardown();
+    process.exit(130);
+  });
+}

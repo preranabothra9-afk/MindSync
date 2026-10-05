@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import {
   LayoutGrid, Plus, LogOut, Users, ArrowRight, RefreshCw,
-  Sparkles, Search, Crown, FolderOpen, ShieldCheck
+  Sparkles, Search, Crown, FolderOpen, ShieldCheck, Home
 } from 'lucide-react';
 import ThemeSwitcher from './ThemeSwitcher';
 
@@ -107,6 +107,18 @@ export default function WorkspaceHub() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* The hub is the post-login landing page and used to be a dead
+                end: there was no way back to the public site without signing
+                out first. `/home` renders the landing page for signed-in users
+                too, so this is a plain round trip rather than a logout. */}
+            <button
+              onClick={() => navigateTo('/home')}
+              title="Back to the home page"
+              className="px-3.5 py-2.5 rounded-xl bg-panel/80 border border-line/60 text-sand hover:text-cream hover:border-line-2 transition-all cursor-pointer flex items-center gap-1.5 text-[14px] font-semibold"
+            >
+              <Home size={13} />
+              <span className="hidden sm:inline">Home</span>
+            </button>
             <ThemeSwitcher variant="panel" />
             {isAdmin && (
               <button

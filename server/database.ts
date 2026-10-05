@@ -69,7 +69,9 @@ async function establishConnection(): Promise<void> {
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
   
   console.log('Successfully established MERN cluster connection with MongoDB Atlas.');
-  await seedDefaultMongoData();
+  // Note: the demo "General Workspace" / "NovaAI Core" seeder is intentionally
+  // NOT run any more. Sample data is not a product feature — every workspace
+  // in the database now belongs to someone who created it.
 }
 
 // Automatically trigger database connection startup
@@ -391,71 +393,11 @@ export const EvidenceModel = (mongoose.models.Evidence || mongoose.model('Eviden
 export const AuditLogModel = (mongoose.models.AuditLog || mongoose.model('AuditLog', AuditLogSchema)) as any;
 export const TimelineEventModel = (mongoose.models.TimelineEvent || mongoose.model('TimelineEvent', TimelineEventSchema)) as any;
 
-// Seed standard workspace if DB is blank (for Mongo mode)
-async function seedDefaultMongoData() {
-  try {
-    const wsCount = await WorkspaceModel.countDocuments();
-    if (wsCount === 0) {
-      console.log('Seeding initial workspace data into MongoDB...');
-      const systemUserId = '00000000-0000-0000-0000-000000000000';
-
-      // Seed a default system user if they don't exist
-      const systemUserExists = await UserModel.findById(systemUserId);
-      if (!systemUserExists) {
-        await UserModel.create({
-          _id: systemUserId,
-          name: 'NovaAI Core',
-          email: 'nova-system@mindsync.io',
-          password: 'N/A_SYSTEM_USER_NO_PASSWORD',
-          avatar: 'SYSTEM',
-          role: 'admin'
-        });
-      }
-
-      await WorkspaceModel.create({
-        _id: 'global-workspace-id',
-        name: 'General Workspace',
-        description: 'Collaborative AI sandbox for brainstorming, multi-model analysis, and real-time team feedback.',
-        ownerId: systemUserId,
-        memberIds: [systemUserId]
-      });
-
-      await ConversationModel.create({
-        _id: 'general-channel-id',
-        workspaceId: 'global-workspace-id',
-        title: '🛰️ Central Brainstorm',
-        createdBy: systemUserId
-      });
-
-      await MessageModel.create({
-        _id: 'welcome-message-id',
-        conversationId: 'general-channel-id',
-        senderId: systemUserId,
-        senderName: 'NovaAI Core',
-        senderAvatar: 'SYSTEM',
-        promptText: 'Analyze MindSync workspace architecture.',
-        modelResponses: {
-          'gemini-2.5-flash': {
-            modelName: 'Gemini 2.5 Flash',
-            content: 'Hello! I am Gemini 2.5 Flash. I am fully integrated into **MindSync** to support streamable team diagnostics, dynamic modeling, and high-fidelity code execution. In this workspace, you can trigger models simultaneously and compare results, observe live presence, edit prompts collaboratively, and save insights instantly.',
-            status: 'completed',
-            durationMs: 420
-          },
-          'gpt-oss-120b': {
-            modelName: 'GPT-OSS 120B',
-            content: 'MindSync operates as a real-time full-stack environment. It enables multi-model cross-examination where multiple collaborators query distinct intelligent agents simultaneously.',
-            status: 'completed',
-            durationMs: 780
-          }
-        }
-      });
-
-      console.log('Seed data successfully applied to MongoDB.');
-    }
-  } catch (error) {
-    console.error('Error seeding default MongoDB data:', error);
-  }
-}
+// Sample/demo workspace seeding has been removed. It used to synthesise a
+// "General Workspace" owned by a system account whenever the database was
+// blank, which meant demo rooms reappeared on every fresh environment and sat
+// in the real user's directory alongside their own work. Nothing seeds
+// workspaces now: if a workspace exists, a person made it.
 
 // --- SECURE MONGO DRIVER WRAPPER ---
 class MongoDatabaseAdapter {

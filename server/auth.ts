@@ -131,9 +131,37 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
   }
 }
 
+/**
+ * `requireAuth` plus a proven email address.
+ *
+ * Login already refuses to issue a token to an unverified account, so this
+ * looks redundant — it is not. Tokens outlive verification: a session minted
+ * before the mailbox was confirmed, a refresh token rotated since, or an
+ * account an admin has since moved back to unverified would all still pass
+ * `requireAuth`, which only checks the token, the session and the block flag.
+ *
+ * Every route that can change *who owns, joins, or can see* a workspace sits
+ * behind this instead, so ownership and membership can only ever be created
+ * by an account that has proven it controls its own mailbox.
+ */
+export async function requireVerifiedAuth(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  // `requireAuth` answers 401/403 itself and never calls `next` on failure, so
+  // this callback only runs for an authenticated, unblocked caller.
+  await requireAuth(req, res, async () => {
+    if (req.user && req.user.isVerified !== true) {
+      res.status(403).json({ error: 'Verify your email address before working with workspaces.' });
+      return;
+    }
+    next();
+  });
+}
+
 // Role-based authorization middleware
-export function requireRole(role: 'user' | 'admin') {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export function requireRole(role: 'user' | 'admin') {  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }

@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { requireAuth, requireRole, adminOnly, AuthenticatedRequest, generateUUID } from './auth';
+import { requireAuth, requireVerifiedAuth, requireRole, adminOnly, AuthenticatedRequest, generateUUID } from './auth';
 import { db, UserModel, WorkspaceModel, MessageModel, ConversationModel, SavedResponseModel, AuditLogModel } from './database';
 import { Workspace, Conversation, SavedResponse, User, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, Evidence, Decision, DecisionGateResult, DecisionSummary, WorkspaceMember } from '../src/types';
 import { createWorkspaceSchema, createChannelSchema, inviteUserSchema, submitPromptSchema, attachEvidenceSchema } from './validators';
@@ -27,7 +27,7 @@ router.get('/auth/me', requireAuth, verifyCurrentUser);
 
 // --- WORKSPACE ROUTER ---
 // Get all workspaces (only workspaces where the user is a member)
-router.get('/workspaces', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/workspaces', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const list = await db.getWorkspaces();
     const userId = req.user!.id;
@@ -46,7 +46,7 @@ router.get('/workspaces', requireAuth, async (req: AuthenticatedRequest, res: Re
 // The workspace's members with names — the decision panel lists them when
 // picking required approvers. Ids alone are useless to a human. Membership is
 // the only access requirement, matching every other workspace read.
-router.get('/workspaces/:id/members', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/workspaces/:id/members', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ws = await db.getWorkspaceById(req.params.id);
     if (!ws) {
@@ -71,7 +71,7 @@ router.get('/workspaces/:id/members', requireAuth, async (req: AuthenticatedRequ
 });
 
 // Create workspace
-router.post('/workspaces', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/workspaces', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const validationResult = createWorkspaceSchema.safeParse(req.body);
     if (!validationResult.success) {
@@ -119,16 +119,19 @@ router.post('/workspaces', requireAuth, async (req: AuthenticatedRequest, res: R
 });
 
 // Invite member to workspace
-router.post('/workspaces/:id/invite', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/workspaces/:id/invite', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ws = await db.getWorkspaceById(req.params.id);
     if (!ws) {
       return res.status(404).json({ error: 'Workspace not found' });
     }
 
-    // Role-authorization: exclusive to workspace owners, global admins, or current workspace members
-    if (ws.ownerId !== req.user!.id && req.user!.role !== 'admin' && !ws.memberIds.includes(req.user!.id)) {
-      return res.status(403).json({ error: 'Only authorized workspace members or administrators can invite collaborators' });
+    // Adding someone to a workspace decides who can read every room inside it,
+    // so it is the owner's call (or an administrator's) — not every member's.
+    // Any verified member used to be able to widen the workspace membership
+    // unilaterally.
+    if (ws.ownerId !== req.user!.id && req.user!.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the workspace owner or an administrator can add collaborators' });
     }
 
     // Zod verification
@@ -158,8 +161,19 @@ router.post('/workspaces/:id/invite', requireAuth, async (req: AuthenticatedRequ
 
       const bcrypt = await import('bcryptjs');
       const salt = await bcrypt.default.genSalt(10);
-      const mockPass = await bcrypt.default.hash('SynapsePassword2026!', salt);
-      invitee = await db.createUser(defaultUser, mockPass);
+      // The password for an invited account must be one *nobody* knows.
+      // This used to be a hardcoded constant shipped in source, which meant
+      // anyone who could read the repo — or who had ever seen an invite —
+      // could sign in as every account ever created by an invitation, the
+      // moment that mailbox got verified. Two discarded UUIDs give the
+      // account the same "cannot be signed into directly" property as before
+      // without leaving a universal key behind; the invitee registers their
+      // own password through the normal reset flow.
+      const orphanPassword = await bcrypt.default.hash(`${generateUUID()}${generateUUID()}`, salt);
+      // Unverified by construction: it may not receive a token until the
+      // address it was invited to has confirmed it owns the mailbox.
+      defaultUser.isVerified = false;
+      invitee = await db.createUser(defaultUser, orphanPassword);
 
       // Save refresh token field in database empty initially
       await UserModel.findByIdAndUpdate(invitee.id, { refreshToken: null }).catch(() => {});
@@ -209,7 +223,7 @@ router.post('/workspaces/:id/invite', requireAuth, async (req: AuthenticatedRequ
 });
 
 // Delete workspace
-router.delete('/workspaces/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/workspaces/:id', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ws = await db.getWorkspaceById(req.params.id);
     if (!ws) {
@@ -244,6 +258,10 @@ router.get('/conversations', requireAuth, async (req: AuthenticatedRequest, res:
     if (!workspaceId) {
       return res.status(400).json({ error: 'workspaceId query parameter is required' });
     }
+    // Without this, any signed-in account could enumerate every workspace's
+    // channels by iterating workspaceId.
+    const ws = await loadWorkspaceForMember(req, res, workspaceId);
+    if (!ws) return;
     const list = await db.getConversations(workspaceId);
     return res.status(200).json(list);
   } catch (err: any) {
@@ -263,6 +281,8 @@ router.post('/conversations', requireAuth, async (req: AuthenticatedRequest, res
     }
 
     const { workspaceId, title } = validationResult.data;
+    const ws = await loadWorkspaceForMember(req, res, workspaceId);
+    if (!ws) return;
 
     const newChannel: Conversation = {
       id: generateUUID(),
@@ -293,6 +313,10 @@ router.delete('/conversations/:id', requireAuth, async (req: AuthenticatedReques
     if (!conv) {
       return res.status(404).json({ error: 'Channel not found' });
     }
+    // Deleting a channel was previously open to any authenticated caller who
+    // knew (or guessed) its id — no owner check, no membership check.
+    const ws = await loadWorkspaceForMember(req, res, conv.workspaceId);
+    if (!ws) return;
 
     await db.deleteConversation(req.params.id);
 
@@ -312,6 +336,10 @@ router.delete('/conversations/:id', requireAuth, async (req: AuthenticatedReques
 // Get messages for conversation (cursor pagination, newest page first)
 router.get('/messages/:conversationId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    // Reading a room's history requires belonging to its workspace — otherwise
+    // a conversation id is a bearer secret.
+    const conv = await loadConversationForRequest(req, res, req.params.conversationId);
+    if (!conv) return;
     const limit = parseInt(req.query.limit as string) || 50;
     const before = (req.query.before as string) || undefined;
     const beforeId = (req.query.beforeId as string) || undefined;
@@ -325,6 +353,8 @@ router.get('/messages/:conversationId', requireAuth, async (req: AuthenticatedRe
 // Search across a room's prompts and model responses
 router.get('/messages/:conversationId/search', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const conv = await loadConversationForRequest(req, res, req.params.conversationId);
+    if (!conv) return;
     const q = ((req.query.q as string) || '').trim();
     if (q.length < 2) {
       return res.status(400).json({ error: 'Search query must be at least 2 characters' });
@@ -367,6 +397,34 @@ router.delete('/messages/:conversationId/claims', requireAuth, async (req: Authe
     return res.status(500).json({ error: 'Failed to clear room claims' });
   }
 });
+
+/**
+ * Loads a workspace and confirms the caller belongs to it.
+ *
+ * The membership checks scattered through this file used to be written out
+ * per route, which is how the channel routes ended up with none at all — any
+ * signed-in account could list, create or delete channels in a workspace it
+ * had never been invited to. Everything scoped to a workspace now funnels
+ * through here so a missing check is a missing call, not a missing idea.
+ */
+async function loadWorkspaceForMember(
+  req: AuthenticatedRequest,
+  res: Response,
+  workspaceId: string
+): Promise<Workspace | null> {
+  const workspace = await db.getWorkspaceById(workspaceId);
+  if (!workspace) {
+    res.status(404).json({ error: 'Workspace not found' });
+    return null;
+  }
+  const isMember = workspace.ownerId === req.user!.id || (workspace.memberIds || []).includes(req.user!.id);
+  const isAdmin = req.user!.role === 'admin';
+  if (!isMember && !isAdmin) {
+    res.status(403).json({ error: 'Only members of this workspace can see or change it' });
+    return null;
+  }
+  return workspace;
+}
 
 /** Loads a room and confirms the caller belongs to its workspace. */
 async function loadConversationForRequest(
@@ -2411,7 +2469,7 @@ router.delete('/admin/users/:id', requireAuth, requireRole('admin'), async (req:
 });
 
 // 6. DETAILED WORKSPACES VISIBILITY
-router.get('/admin/workspaces', requireAuth, requireRole('admin'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/admin/workspaces', requireVerifiedAuth, requireRole('admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const workspaces = await WorkspaceModel.find().lean() as any[];
     
@@ -2440,7 +2498,7 @@ router.get('/admin/workspaces', requireAuth, requireRole('admin'), async (req: A
 });
 
 // 7. ABUSIVE WORKSPACE TERMINATION
-router.delete('/admin/workspaces/:id', requireAuth, requireRole('admin'), async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/admin/workspaces/:id', requireVerifiedAuth, requireRole('admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const wsId = req.params.id;
     const ws = await db.getWorkspaceById(wsId);
