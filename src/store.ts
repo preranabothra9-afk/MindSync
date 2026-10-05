@@ -32,6 +32,7 @@ export type EvidenceInput =
 
 // Import our modular stores to compose the hub
 import { useAuthStore } from './stores/authStore';
+import { persistPendingVerificationEmail } from './stores/authStore';
 import { useWorkspaceStore } from './stores/workspaceStore';
 import { useSocketStore } from './stores/socketStore';
 import { useUIStore } from './stores/uiStore';
@@ -915,7 +916,13 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     register: async (name, email, password) => {
-      useAuthStore.setState({ isAuthenticating: true, authError: null });
+      // Deliberately do NOT flip isAuthenticating here. App.tsx renders a
+      // full-screen branded loader while it is set, which unmounts AuthPortal
+      // mid-submit and discards the local state the verify screen depends on
+      // (mailFailed, the manual-link panel). The submit button already shows its
+      // own spinner, and registration lands on the verify page rather than
+      // entering the app, so there is nothing to load over.
+      useAuthStore.setState({ authError: null });
       try {
         const res = await fetch(`${API_BASE}/auth/register`, {
           method: 'POST',
@@ -2188,6 +2195,7 @@ useAuthStore.subscribe((state) => {
     isAuthenticating: state.isAuthenticating,
     authError: state.authError,
   });
+  persistPendingVerificationEmail(state.pendingVerificationEmail);
 });
 
 useWorkspaceStore.subscribe((state) => {

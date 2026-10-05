@@ -77,11 +77,14 @@ export default function AuthPortal() {
     }
   }, []);
 
-  // Landing on /verify-email?token=... consumes the token immediately. When there is
-  // no token we are on the post-signup "check your inbox" screen instead, so the
-  // effect stays inert and lets the user resend.
+  // Landing on /verify-email?token=... consumes the token immediately. The token
+  // is also what separates a real inbound link from the post-signup "check your
+  // inbox" screen: without one we stay inert and let the user resend, instead of
+  // reporting a missing token to someone who simply has not opened their mail yet.
   const arrivedViaVerifyLink = useRef(
-    typeof window !== 'undefined' && window.location.pathname === '/verify-email'
+    typeof window !== 'undefined' &&
+      window.location.pathname === '/verify-email' &&
+      new URLSearchParams(window.location.search).has('token')
   );
 
   useEffect(() => {
@@ -767,7 +770,15 @@ export default function AuthPortal() {
                 className="w-full py-3 mt-2 bg-ember hover:bg-ember-2 text-on-ember font-bold text-[15px] rounded-2xl transition-colors shadow-md shadow-ember/20 cursor-pointer flex items-center justify-center gap-1.5 btn-3d disabled:opacity-60 disabled:cursor-wait"
               >
                 {view === 'register' ? <UserPlus size={14} /> : <LogIn size={14} />}
-                <span>{view === 'register' ? 'Register Account' : 'Authenticate Session'}</span>
+                <span>
+                  {view === 'register'
+                    ? isSubmitting
+                      ? 'Creating account\u2026'
+                      : 'Register Account'
+                    : isSubmitting
+                      ? 'Authenticating\u2026'
+                      : 'Authenticate Session'}
+                </span>
               </button>
             </form>
 
