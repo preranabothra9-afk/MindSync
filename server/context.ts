@@ -2,6 +2,27 @@ import { db } from './database';
 import { buildDecisionContext, MAX_DECISION_CONTEXT_CHARS } from './decisionContext';
 import { Message } from '../src/types';
 
+/** Reads CONTEXT_DEBUG at call time so it can be toggled without a restart. */
+export function contextTraceEnabled(): boolean {
+  return process.env.CONTEXT_DEBUG === 'true';
+}
+
+/**
+ * Prints the composed prompt + hasContext flag when CONTEXT_DEBUG=true.
+ * Reads the env at call time, not at import time, so the toggle takes
+ * effect on the next relevant socket event without a server restart.
+ */
+export function traceRoomContext(prompt: string, hasContext: boolean): void {
+  if (!contextTraceEnabled()) return;
+  // Use console.log directly so the output is visible in terminal/Systemd/etc.
+  // eslint-disable-next-line no-console
+  console.log('\n[CONTEXT_DEBUG] ===== Composed Prompt =====\n');
+  // eslint-disable-next-line no-console
+  console.log(prompt);
+  // eslint-disable-next-line no-console
+  console.log(`\n[CONTEXT_DEBUG] hasContext=${hasContext} ===== end =====\n`);
+}
+
 // ---------------------------------------------------------------------------
 // Persistent AI context: claims + room history.
 //

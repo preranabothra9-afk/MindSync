@@ -3,7 +3,7 @@ import { Server as HttpServer } from 'http';
 import jwt from 'jsonwebtoken';
 import { db } from './database';
 import { streamModel, AI_MODELS } from './ai';
-import { extractClaims, buildRoomContext } from './context';
+import { extractClaims, buildRoomContext, traceRoomContext } from './context';
 import { detectContradictions } from './relations';
 import { Message, PresenceUser, Claim } from '../src/types';
 import { generateUUID, getJwtSecret } from './auth';
@@ -306,6 +306,7 @@ export function setupSocketIO(server: HttpServer) {
       // The current message has no completed responses yet, so it is naturally
       // excluded from its own context.
       const { prompt: contextPrompt, hasContext } = await buildRoomContext(conversationId, promptText);
+      traceRoomContext(contextPrompt, hasContext);
 
       // Execute comparative streaming asynchronously in parallel
       selectedModels.forEach(async (modelKey) => {
