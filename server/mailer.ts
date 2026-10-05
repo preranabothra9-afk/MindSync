@@ -72,6 +72,16 @@ function brandName(): string {
   return process.env.MAIL_FROM_NAME || 'MindSync';
 }
 
+/**
+ * Resolves the From: address. This is deliberately NOT the SMTP login: Brevo's
+ * generated "…@smtp-brevo.com" login is not a real mailbox and is rejected as
+ * a sender, so an explicit MAIL_FROM_ADDRESS is required there. Gmail's login
+ * is a real address, so it can serve as its own sender.
+ */
+export function resolveFromAddress(): string | null {
+  return process.env.MAIL_FROM_ADDRESS || process.env.SMTP_USER || null;
+}
+
 interface OutboundMail {
   to: string;
   subject: string;
@@ -150,9 +160,11 @@ async function sendViaSmtp(
   transport: Transporter,
   mail: OutboundMail
 ): Promise<boolean> {
-  // The from address is the provider login, which must be a verified sender on
-  // that account (Brevo: BREVO_USER, Gmail: SMTP_USER).
-  const fromAddress = process.env.BREVO_USER || process.env.SMTP_USER;
+  // The From: address must be a VERIFIED SENDER on the provider — it is not the
+  // SMTP login. In particular Brevo's login is a generated "…@smtp-brevo.com"
+  // address that cannot receive replies and is not a valid sender, so
+  // MAIL_FROM_ADDRESS is required there.
+  const fromAddress = resolveFromAddress();
   if (!fromAddress) return false;
 
   try {
