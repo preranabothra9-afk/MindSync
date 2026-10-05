@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import { Check, Trash2, Reply } from 'lucide-react';
-import type { DiscussionComment, ContradictionVote, ContradictionVoteChoice, ClaimRelation } from '../types';
+import { Check, Trash2, Reply, ScrollText } from 'lucide-react';
+import type { DiscussionComment, ContradictionVote, ContradictionVoteChoice, ClaimRelation, Evidence, EvidenceKind } from '../types';
+
+const KIND_LABEL: Record<EvidenceKind, string> = {
+  url: 'link',
+  file: 'file',
+  quote: 'quote',
+  user: 'note',
+  ai: 'AI reference',
+};
 
 interface Props {
   relationId: string;
@@ -93,17 +101,23 @@ export default function ContradictionDiscussion({ relationId, canResolve, onRepl
   const castContradictionVote = useStore((s) => s.castContradictionVote);
   const deleteContradictionComment = useStore((s) => s.deleteContradictionComment);
   const resolveContradiction = useStore((s) => s.resolveContradiction);
+  const evidenceMap = useStore((s) => s.evidence);
+  const fetchEvidenceForRelation = useStore((s) => s.fetchEvidenceForRelation);
 
   const [resolution, setResolution] = useState('');
   const [confirming, setConfirming] = useState<'resolved' | 'evidence-needed' | 'dismissed' | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Evidence the closer has chosen to cite in the decision. */
+  const [citedIds, setCitedIds] = useState<string[]>([]);
   /** Refusal reason from the server, shown inline instead of failing silently. */
   const [closeError, setCloseError] = useState<string | null>(null);
 
-  // Load the thread + tally when this contradiction is opened.
+  // Load the thread + tally when this contradiction is opened, and the evidence
+  // on both sides so the closer can cite it while deciding.
   useEffect(() => {
     fetchDiscussion(relationId);
-  }, [relationId, fetchDiscussion]);
+    fetchEvidenceForRelation(relationId);
+  }, [relationId, fetchDiscussion, fetchEvidenceForRelation]);
 
   const comments = discussion?.comments ?? [];
   const votes = discussion?.votes ?? [];
@@ -115,23 +129,44 @@ export default function ContradictionDiscussion({ relationId, canResolve, onRepl
 
   const reasonTooShort = resolution.trim().length < 3;
 
+  // The evidence the room can point at while closing: everything attached to
+  // either side of the pair, tagged with the side it backs.
+  const evidenceA = relation ? evidenceMap[relation.claimAId] ?? [] : [];
+  const evidenceB = relation ? evidenceMap[relation.claimBId] ?? [] : [];
+  const citeable = [
+    ...evidenceA.map((e) => ({ ...e, side: 'A' as const })),
+    ...evidenceB.map((e) => ({ ...e, side: 'B' as const })),
+  ];
+
+  const toggleCite = (id: string) => {
+    setCitedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
   const handleClose = async (status: 'resolved' | 'evidence-needed' | 'dismissed') => {
     if (reasonTooShort || submitting) return;
     setSubmitting(true);
     setCloseError(null);
-    const err = await resolveContradiction(relationId, status, resolution.trim());
+    const err = await resolveContradiction(relationId, status, resolution.trim(), citedIds);
     setSubmitting(false);
     if (err) {
       setCloseError(err);
       return;
     }
     setResolution('');
+    setCitedIds([]);
     setConfirming(null);
   };
 
   // Any status other than 'detected' is a closed state — including
   // 'evidence-needed', which closes without picking a winning claim.
   const closed = relation ? relation.status !== 'detected' : false;
+
+  // The evidence an authorized human cited when closing. Ids whose evidence was
+  // since deleted are absent from the map and drop out here, so the record
+  // never displays a citation that no longer resolves.
+  const citedItems = (relation?.citedEvidenceIds ?? [])
+    .map((id) => citeable.find((e) => e.id === id))
+    .filter((e): e is Evidence & { side: 'A' | 'B' } => !!e);
 
   return (
     <div className="space-y-3">
@@ -157,6 +192,31 @@ export default function ContradictionDiscussion({ relationId, canResolve, onRepl
             )}
           </div>
           <p className="text-xs text-sand leading-relaxed">{relation.resolution}</p>
+          {citedItems.length > 0 && (
+            <div className="pt-1 space-y-1">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-faint">Evidence cited in the decision</p>
+              {citedItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-1.5 text-[10px] rounded-md border px-1.5 py-1 ${
+                    item.aiGenerated ? 'bg-cat-violet/[0.06] border-cat-violet/25' : 'bg-panel-2 border-line'
+                  }`}
+                >
+                  <ScrollText size={10} className="text-faint shrink-0" />
+                  <span className="text-sand truncate">{item.title}</span>
+                  <span className="font-mono text-faint shrink-0">claim {item.side}</span>
+                  {item.aiGenerated && (
+                    <span
+                      title="AI-generated references are unverified — a model's reading, not proof"
+                      className="font-bold text-cat-violet shrink-0"
+                    >
+                      · unverified
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <p className="text-[10px] text-faint">Closed by {relation.resolvedByName ?? 'an authorized member'}</p>
         </div>
       )}
@@ -214,6 +274,46 @@ export default function ContradictionDiscussion({ relationId, canResolve, onRepl
             <p className="text-[10px] text-rust leading-relaxed bg-rust/10 border border-rust/30 rounded-md px-2 py-1">
               {closeError}
             </p>
+          )}
+          {citeable.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
+                Cite evidence in the decision <span className="font-mono text-faint/70">({citedIds.length} selected)</span>
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {citeable.map((item) => {
+                  const on = citedIds.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => toggleCite(item.id)}
+                      title={`${item.title} — ${KIND_LABEL[item.kind]} for claim ${item.side}${item.aiGenerated ? ' (AI-generated, unverified)' : ''}`}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold border transition-colors cursor-pointer ${
+                        on
+                          ? 'bg-ember/15 border-ember/40 text-ember-soft'
+                          : 'bg-transparent border-line/50 text-faint hover:text-cream hover:border-line-2'
+                      }`}
+                    >
+                      {on && <Check size={8} className="shrink-0" />}
+                      <span className="truncate max-w-[110px]">{item.title}</span>
+                      <span className="font-mono opacity-70 shrink-0">{item.side}</span>
+                      {item.aiGenerated && (
+                        <span
+                          title="AI-generated reference — unverified"
+                          className="text-cat-violet shrink-0"
+                        >
+                          ·AI
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[9px] text-faint/70 leading-relaxed">
+                Cited evidence is recorded with the decision. AI references stay labelled unverified.
+              </p>
+            </div>
           )}
           <div className="flex gap-1.5">
             <button

@@ -79,6 +79,11 @@ export function setupSocketIO(server: HttpServer) {
       // refreshes and retries, so log it quietly instead of dumping a stack trace.
       if (err?.name === 'TokenExpiredError') {
         console.warn('Socket handshake: access token expired, awaiting client refresh.');
+      } else if (err?.name === 'MongoServerSelectionError' || err?.code === 'ENOTFOUND') {
+        // The token verified fine; the user lookup just couldn't reach Atlas
+        // (transient DNS/cluster blip). The client's reconnect handler will
+        // keep retrying, so keep this to one quiet line rather than a dump.
+        console.warn('Socket handshake deferred: user store temporarily unreachable.');
       } else {
         console.error('Socket authentication handshake signature error:', err);
       }
@@ -280,6 +285,21 @@ export function setupSocketIO(server: HttpServer) {
       // Broadcast Message Created to everyone (so cards with shimmer appear immediately in workspace!)
       io.to(roomName).emit('message-created', newMessage);
 
+      // The prompt opens the replay: every claim the room ever mines traces back
+      // to one of these, so a decision's timeline shows the question that
+      // started it. Fire-and-forget — the room must not lose a prompt because
+      // the event stream was briefly unavailable.
+      db.recordTimelineEvent({
+        conversationId,
+        kind: 'prompt',
+        actorId: userId,
+        actorName: userName,
+        title: 'Prompt sent',
+        detail: promptText.length > 140 ? `${promptText.slice(0, 140)}…` : promptText,
+        messageId,
+        meta: { promptText, models: selectedModels }
+      }).catch(() => {});
+
       // Build the room's persistent context ONCE and share it with every
       // selected model. Keeping this outside the per-model loop means N models
       // cost one history lookup, not N, and every model sees identical grounding.
@@ -319,6 +339,28 @@ export function setupSocketIO(server: HttpServer) {
           const generation: ActiveGeneration = { controller, stopped: false };
           activeGenerations.set(generationKey, generation);
 
+          // Records a model reply on the timeline, once per outcome. A reply is
+          // the thing the room's claims are mined from, so the replay needs to
+          // see it — including when it was cut short or failed, which is part
+          // of the room's record rather than something to paper over.
+          const recordResponse = (status: 'completed' | 'stopped' | 'failed', durationMs?: number, error?: string): void => {
+            const modelConfig = AI_MODELS[modelKey];
+            db.recordTimelineEvent({
+              conversationId,
+              kind: 'ai-response',
+              actorId: null,
+              actorName: modelConfig ? modelConfig.name : modelKey,
+              title: status === 'completed' ? 'Model replied' : status === 'stopped' ? 'Reply stopped' : 'Reply failed',
+              detail: status === 'completed'
+                ? 'Completed a reply to the prompt.'
+                : status === 'stopped'
+                  ? 'The reply was stopped mid-stream.'
+                  : `The reply failed: ${(error ?? 'unknown error').slice(0, 120)}`,
+              messageId,
+              meta: { modelKey, status, durationMs, error: error ?? null }
+            }).catch(() => {});
+          };
+
           const onChunkCallback = (chunk: string) => {
             fullContent += chunk;
             // Emit traditional chunk
@@ -339,8 +381,7 @@ export function setupSocketIO(server: HttpServer) {
           // to everyone in the room. Runs after the response is persisted, so a
           // failure here never loses the answer itself. Purely heuristic — no
           // extra model call, identical for every provider.
-          const broadcastNewClaims = async (finalText: string) => {
-            const extracted = extractClaims(finalText);
+          const broadcastNewClaims = async (finalText: string) => {            const extracted = extractClaims(finalText);
             if (extracted.length === 0) return;
 
             const modelConfig = AI_MODELS[modelKey];
@@ -359,6 +400,25 @@ export function setupSocketIO(server: HttpServer) {
             if (saved.length > 0) {
               io.to(roomName).emit('claims-created', { messageId, modelKey, claims: saved });
 
+              // The room gained durable memory: claims later prompts are
+              // grounded in, and the load-bearing ones become a decision's
+              // foundation. Recorded against the message so a decision's
+              // timeline can trace a claim back to the answer it came from.
+              db.recordTimelineEvent({
+                conversationId,
+                kind: 'claim-extracted',
+                actorId: null,
+                actorName: modelConfig ? modelConfig.name : modelKey,
+                title: 'Claims extracted',
+                detail: `${saved.length} claim${saved.length === 1 ? '' : 's'} mined from a model reply.`,
+                messageId,
+                claimIds: saved.map((c) => c.id),
+                meta: {
+                  modelKey,
+                  claims: saved.map((c) => ({ id: c.id, text: c.text, modelName: c.modelName }))
+                }
+              }).catch(() => {});
+
               // Measure the fresh claims against what the room already established.
               // Best-effort like extraction itself: a failure here is contained, and
               // never disturbs the response the user just received.
@@ -368,6 +428,31 @@ export function setupSocketIO(server: HttpServer) {
                   const contradictions = relations.filter((rel) => rel.relationship === 'CONTRADICT');
                   if (contradictions.length > 0) {
                     io.to(roomName).emit('contradiction-detected', { conversationId, relations: contradictions });
+                  }
+
+                  // Every edge the detector reports is part of the room's
+                  // narrative: a CONTRADICT is a disagreement the room must
+                  // face, while SUPPORT and RELATED are the context around it.
+                  // Only CONTRADICT counts against the gate, so that is the
+                  // distinction the replay keeps.
+                  for (const rel of relations) {
+                    db.recordTimelineEvent({
+                      conversationId,
+                      kind: 'contradiction-detected',
+                      actorId: null,
+                      actorName: 'Contradiction detector',
+                      title: rel.relationship === 'CONTRADICT' ? 'Contradiction detected' : `Claims marked ${rel.relationship}`,
+                      detail: rel.explanation,
+                      relationId: rel.id,
+                      claimIds: [rel.claimAId, rel.claimBId],
+                      meta: {
+                        relationship: rel.relationship,
+                        confidence: rel.confidence,
+                        explanation: rel.explanation,
+                        claimAText: rel.claimAText,
+                        claimBText: rel.claimBText
+                      }
+                    }).catch(() => {});
                   }
                 })
                 .catch((e) => console.warn('[socket] contradiction detection failed:', e?.message || e));
@@ -398,6 +483,8 @@ export function setupSocketIO(server: HttpServer) {
               durationMs,
               status: 'stopped'
             });
+
+            recordResponse('stopped', durationMs);
 
             // A stopped stream may still contain complete, quotable sentences.
             broadcastNewClaims(fullContent).catch((e) =>
@@ -438,6 +525,8 @@ export function setupSocketIO(server: HttpServer) {
               status: 'completed'
             });
 
+            recordResponse('completed', durationMs);
+
             // Mine the finished answer for durable claims and broadcast them.
             broadcastNewClaims(finalText).catch((e) =>
               console.warn('[socket] claim extraction failed:', e?.message || e)
@@ -470,6 +559,8 @@ export function setupSocketIO(server: HttpServer) {
               error: err,
               status: 'failed'
             });
+
+            recordResponse('failed', undefined, err);
           };
 
           // Route to centralized AI providers; transport is resolved from the registry.

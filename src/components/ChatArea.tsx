@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { ArrowDown, ArrowUp, Network, Loader2, Trash2 } from 'lucide-react';
 import MessageRow from './MessageRow';
+import { dayLabel, isSameDay } from '../utils/date';
 
 export default function ChatArea() {
   const { messages, activeConversation, saveResponse, savedResponses, deleteSavedResponse, submitPrompt, stopGeneration, hasMoreMessages, isLoadingOlder, loadOlderMessages, highlightMessageId, setHighlightMessageId, deleteMessage, clearChat } = useStore();
@@ -226,23 +227,37 @@ export default function ChatArea() {
             </div>
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageRow
-              key={msg.id}
-              msg={msg}
-              isEditing={editingId === msg.id}
-              highlight={highlightMessageId === msg.id}
-              pinnedKeys={pinnedKeys}
-              copiedMap={copiedIdMap}
-              onStartEditing={startEditing}
-              onCancelEditing={cancelEditing}
-              onCopy={handleCopyText}
-              onPinToggle={handlePinToggle}
-              onStop={stopGeneration}
-              onSubmitPrompt={submitPrompt}
-              onDelete={deleteMessage}
-            />
-          ))
+          messages.map((msg, index) => {
+            // First message of a new calendar day gets a WhatsApp-style
+            // separator ("Today", "Yesterday", "Monday", or a date).
+            const prev = messages[index - 1];
+            const showSeparator = !prev || !isSameDay(prev.createdAt, msg.createdAt);
+            return (
+              <div key={msg.id} className="space-y-3">
+                {showSeparator && (
+                  <div className="flex justify-center pt-1 pb-0 select-none">
+                    <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-faint bg-panel/80 border border-line/60 rounded-full px-3 py-1 backdrop-blur-sm">
+                      {dayLabel(msg.createdAt)}
+                    </span>
+                  </div>
+                )}
+                <MessageRow
+                  msg={msg}
+                  isEditing={editingId === msg.id}
+                  highlight={highlightMessageId === msg.id}
+                  pinnedKeys={pinnedKeys}
+                  copiedMap={copiedIdMap}
+                  onStartEditing={startEditing}
+                  onCancelEditing={cancelEditing}
+                  onCopy={handleCopyText}
+                  onPinToggle={handlePinToggle}
+                  onStop={stopGeneration}
+                  onSubmitPrompt={submitPrompt}
+                  onDelete={deleteMessage}
+                />
+              </div>
+            );
+          })
         )}
       </div>
 

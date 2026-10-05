@@ -599,6 +599,40 @@ export async function getGeminiTextResponse(prompt: string): Promise<string> {
 }
 
 /**
+ * The strict counterpart to `getGeminiTextResponse`, for anything the room
+ * treats as a record rather than a reply.
+ *
+ * The difference is entirely in the failure path. `getGeminiTextResponse`
+ * falls back to `generateOfflineFallbackResponse`, which composes plausible
+ * text from the prompt — fine for a chat reply, catastrophic for a decision
+ * summary, where a fabricated paragraph would be indistinguishable from a
+ * real one. Here, any failure returns `null` and the caller reports plainly
+ * that no narration was produced.
+ *
+ * Returns null when the API is unconfigured, when every model in the cascade
+ * fails, or when the model returns nothing usable.
+ */
+export async function getGeminiTextResponseOrNull(prompt: string): Promise<string | null> {
+  const client = getGeminiClient();
+  if (!client) return null;
+
+  const cascade = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  for (const modelName of cascade) {
+    try {
+      const response = await retryWithBackoff(() =>
+        client.models.generateContent({ model: modelName, contents: prompt })
+      );
+      const text = (response.text || '').trim();
+      if (text) return text;
+    } catch (error: any) {
+      const message = (error?.message || String(error)).replace(/\s+/g, ' ').trim();
+      console.warn(`[ai] strict Gemini call ${modelName} failed, trying next fallback: ${message.slice(0, 200)}`);
+    }
+  }
+  return null;
+}
+
+/**
  * Streams real Gemini API responses character/token chunk-by-chunk and broadcasts as callbacks
  */
 export async function streamRealGemini(

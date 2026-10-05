@@ -10,7 +10,7 @@ import { rateLimit } from 'express-rate-limit';
 
 import router from './server/routes';
 import { setupSocketIO } from './server/socket';
-import { connectDB } from './server/database';
+import { connectDB, db } from './server/database';
 import { seedAdmin } from './server/seed/seedAdmin';
 
 async function startServer() {
@@ -19,6 +19,17 @@ async function startServer() {
     await connectDB();
     // Run Admin seeder on MongoDB connection success, before Express starts listening
     await seedAdmin();
+    // Fail any response left mid-flight by a previous process. Only an
+    // in-memory generation can finish a `pending`/`streaming` row, and a
+    // restart has killed all of them — without this the room shows a
+    // permanent "queued" shimmer on those prompts.
+    const reaped = await db.reapInterruptedStreams().catch((e) => {
+      console.warn('Startup reaper could not run:', e?.message || e);
+      return 0;
+    });
+    if (reaped > 0) {
+      console.log(`Reaped ${reaped} interrupted response${reaped === 1 ? '' : 's'} left mid-flight by a previous process.`);
+    }
   } catch (dbErr) {
     console.error('SERVER INITIALIZATION: Database connection failed on startup. Server is routing traffic but DB operations may be blocked:', dbErr);
   }
@@ -77,8 +88,11 @@ async function startServer() {
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/register', authLimiter);
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // File evidence travels inline as a base64 data URI (the same convention as
+  // message inlineData), and base64 is ~4/3 the raw size — the 8 MB cap needs
+  // headroom above it, or Express answers 413 before the route ever runs.
+  app.use(express.json({ limit: '12mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
   // API Routes
   app.use('/api', router);

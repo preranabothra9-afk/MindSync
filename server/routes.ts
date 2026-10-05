@@ -1,10 +1,12 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireRole, adminOnly, AuthenticatedRequest, generateUUID } from './auth';
 import { db, UserModel, WorkspaceModel, MessageModel, ConversationModel, SavedResponseModel, AuditLogModel } from './database';
-import { Workspace, Conversation, SavedResponse, User, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice } from '../src/types';
-import { createWorkspaceSchema, createChannelSchema, inviteUserSchema, submitPromptSchema } from './validators';
+import { Workspace, Conversation, SavedResponse, User, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, Evidence, Decision, DecisionGateResult, DecisionSummary, WorkspaceMember } from '../src/types';
+import { createWorkspaceSchema, createChannelSchema, inviteUserSchema, submitPromptSchema, attachEvidenceSchema } from './validators';
 import { getIo } from './socket';
-import { AI_MODELS, isModelConfigured, DEFAULT_COMPARISON_MODELS } from './ai';
+import { AI_MODELS, isModelConfigured, DEFAULT_COMPARISON_MODELS, getGeminiTextResponseOrNull } from './ai';
+import { generateAiReference } from './evidence';
+import { evaluateDecisionGate, buildDecisionReplay, buildDecisionSummary, buildSummaryNarrationPrompt } from './decisions';
 
 const router = Router();
 
@@ -38,6 +40,33 @@ router.get('/workspaces', requireAuth, async (req: AuthenticatedRequest, res: Re
     return res.status(200).json(accessible);
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to retrieve workspaces' });
+  }
+});
+
+// The workspace's members with names — the decision panel lists them when
+// picking required approvers. Ids alone are useless to a human. Membership is
+// the only access requirement, matching every other workspace read.
+router.get('/workspaces/:id/members', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ws = await db.getWorkspaceById(req.params.id);
+    if (!ws) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+    const isMember = ws.ownerId === req.user!.id || (ws.memberIds || []).includes(req.user!.id);
+    const isAdmin = req.user!.role === 'admin';
+    if (!isMember && !isAdmin) {
+      return res.status(403).json({ error: 'Only workspace members can view this workspace' });
+    }
+
+    const ids = Array.from(new Set([ws.ownerId, ...(ws.memberIds || [])]));
+    const users = await db.getUsersByIds(ids);
+    const byId = new Map(users.map((u) => [u.id, u.name]));
+    const members = ids.map((id) => ({ id, name: byId.get(id) ?? 'Unknown member' }));
+
+    return res.status(200).json({ members });
+  } catch (err: any) {
+    console.error('Error fetching workspace members:', err);
+    return res.status(500).json({ error: 'Failed to retrieve workspace members' });
   }
 });
 
@@ -522,6 +551,24 @@ router.post('/messages/:conversationId/relations/:relationId/comments', requireA
       comment: saved
     });
 
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'comment-added',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: parentId ? 'Replied in a discussion' : 'Commented on a contradiction',
+      detail: parentId ? 'Replied to a comment.' : `Joined the discussion of a contradiction.`,
+      relationId: ctx.relation.id,
+      claimIds: [ctx.relation.claimAId, ctx.relation.claimBId],
+      meta: {
+        commentId: saved.id,
+        text,
+        claimAText: ctx.relation.claimAText,
+        claimBText: ctx.relation.claimBText,
+        relationship: ctx.relation.relationship
+      }
+    });
+
     return res.status(201).json(saved);
   } catch (err: any) {
     console.error('Error adding contradiction comment:', err);
@@ -544,6 +591,18 @@ router.delete('/messages/:conversationId/relations/:relationId/comments/:comment
     emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'contradiction-comment-deleted', {
       relationId: ctx.relation.id,
       commentId: req.params.commentId
+    });
+
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'comment-deleted',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Comment removed',
+      detail: canModerate ? 'Removed a comment from the discussion.' : 'Removed their own comment.',
+      relationId: ctx.relation.id,
+      claimIds: [ctx.relation.claimAId, ctx.relation.claimBId],
+      meta: { commentId: req.params.commentId }
     });
 
     return res.status(200).json({ commentId: req.params.commentId });
@@ -585,6 +644,30 @@ router.post('/messages/:conversationId/relations/:relationId/vote', requireAuth,
       votes
     });
 
+    // A vote is the room weighing in; the tally never closes anything on its
+    // own, and the replay shows it as advice rather than a verdict.
+    const CHOICE_LABEL: Record<ContradictionVoteChoice, string> = {
+      CLAIM_A: 'one side',
+      CLAIM_B: 'the other side',
+      NEITHER: 'neither side'
+    };
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'vote-cast',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Voted in a poll',
+      detail: `Voted for ${CHOICE_LABEL[choice as ContradictionVoteChoice]} (${votes.length} vote${votes.length === 1 ? '' : 's'} so far).`,
+      relationId: ctx.relation.id,
+      claimIds: [ctx.relation.claimAId, ctx.relation.claimBId],
+      meta: {
+        choice,
+        tally: votes.map((v) => ({ userId: v.userId, userName: v.userName, choice: v.choice })),
+        claimAText: ctx.relation.claimAText,
+        claimBText: ctx.relation.claimBText
+      }
+    });
+
     return res.status(200).json({ relationId: ctx.relation.id, votes });
   } catch (err: any) {
     console.error('Error recording contradiction vote:', err);
@@ -615,11 +698,26 @@ async function handleCloseContradiction(
       return res.status(400).json({ error: 'A short reason is required to close a contradiction' });
     }
 
+    // Evidence the closer chose to cite. Only ids actually attached to one of
+    // this contradiction's two claims are accepted, so a stale or hostile
+    // client cannot pin unrelated evidence onto the record.
+    const requestedIds: string[] = Array.isArray(req.body?.citedEvidenceIds)
+      ? req.body.citedEvidenceIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    let citedEvidenceIds: string[] = [];
+    if (requestedIds.length > 0) {
+      const available = await db.getEvidenceForClaims(ctx.conversation.id, [ctx.relation.claimAId, ctx.relation.claimBId]);
+      const valid = new Set<string>();
+      for (const list of Object.values(available)) for (const ev of list) valid.add(ev.id);
+      citedEvidenceIds = requestedIds.filter((id: string) => valid.has(id));
+    }
+
     const updated = await db.resolveRelation(ctx.conversation.id, ctx.relation.id, {
       status,
       resolution,
       resolvedBy: req.user!.id,
-      resolvedByName: req.user!.name
+      resolvedByName: req.user!.name,
+      citedEvidenceIds
     });
     if (!updated) {
       return res.status(404).json({ error: 'Contradiction not found in this room' });
@@ -640,6 +738,29 @@ async function handleCloseContradiction(
       relation: updated
     });
 
+    // The decisive room event: a person faced the disagreement and decided what
+    // to do about it. This is what backs a claim the evidence gate will accept,
+    // so the replay has to show it exactly as the room recorded it.
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'contradiction-resolved',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Contradiction closed',
+      detail: `Closed as ${status}: ${resolution}`,
+      relationId: updated.id,
+      claimIds: [updated.claimAId, updated.claimBId],
+      meta: {
+        status,
+        resolution,
+        relationship: updated.relationship,
+        claimAText: updated.claimAText,
+        claimBText: updated.claimBText,
+        resolvedByName: updated.resolvedByName,
+        citedEvidenceIds
+      }
+    });
+
     return res.status(200).json({ relation: updated });
   } catch (err: any) {
     console.error('Error closing contradiction:', err);
@@ -653,6 +774,1095 @@ async function handleCloseContradiction(
 router.post('/messages/:conversationId/relations/:relationId/resolved', requireAuth, (req, res) => handleCloseContradiction(req as AuthenticatedRequest, res, 'resolved'));
 router.post('/messages/:conversationId/relations/:relationId/evidence-needed', requireAuth, (req, res) => handleCloseContradiction(req as AuthenticatedRequest, res, 'evidence-needed'));
 router.post('/messages/:conversationId/relations/:relationId/dismissed', requireAuth, (req, res) => handleCloseContradiction(req as AuthenticatedRequest, res, 'dismissed'));
+
+// ─── EVIDENCE ───────────────────────────────────────────────────────────
+// Material attached to a claim: a link, a file, a verbatim quote, a member's
+// own note, or an AI-generated reference. Evidence travels with the claim it
+// backs, and every piece is visible inside the claim's detail view and, for a
+// contradiction, alongside both sides while the room decides.
+//
+// Reads and writes are open to every workspace member (matching the discussion
+// rules). Deletion is author-or-moderator, like comments. AI references are
+// generated, not authored: they are created without a member, are labelled
+// unverified for life, and are only ever produced from a verbatim passage of
+// the response the claim came from.
+
+/** Largest file accepted as inline evidence (8 MB of base64). */
+const MAX_EVIDENCE_FILE_BYTES = 8 * 1024 * 1024;
+/** MIME types safe to store inline and hand back to a browser. */
+const ALLOWED_EVIDENCE_MIME_TYPES = new Set([
+  'text/plain', 'text/markdown', 'text/csv', 'application/json',
+  'application/pdf',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/zip'
+]);
+
+/**
+ * Loads a claim, confirms it belongs to the room in the URL, and confirms the
+ * caller is a member of that room's workspace. Evidence is scoped through the
+ * claim, so this is the single gate every evidence request passes.
+ */
+async function loadClaimContext(
+  req: AuthenticatedRequest,
+  res: Response,
+  conversationId: string,
+  claimId: string
+): Promise<{ claim: Claim; conversation: Conversation; workspace: Workspace } | null> {
+  const claim = await db.getClaimById(conversationId, claimId);
+  if (!claim) {
+    res.status(404).json({ error: 'Claim not found in this room' });
+    return null;
+  }
+
+  const conversation = await db.getConversationById(conversationId);
+  if (!conversation) {
+    res.status(404).json({ error: 'Room not found' });
+    return null;
+  }
+
+  const workspace = await db.getWorkspaceById(conversation.workspaceId);
+  if (!workspace) {
+    res.status(404).json({ error: 'Workspace not found' });
+    return null;
+  }
+
+  const isMember = workspace.ownerId === req.user!.id || (workspace.memberIds || []).includes(req.user!.id);
+  const isAdmin = req.user!.role === 'admin';
+  if (!isMember && !isAdmin) {
+    res.status(403).json({ error: 'Only workspace members can manage evidence in this room' });
+    return null;
+  }
+
+  return { claim, conversation, workspace };
+}
+
+/** Validates the per-kind payload rules zod cannot express inline. */
+function validateEvidenceFields(kind: string, body: any): string | null {
+  if (kind === 'url') {
+    const url = typeof body.url === 'string' ? body.url.trim() : '';
+    if (!url) return 'Link evidence needs a URL';
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'Only http and https links are accepted';
+    } catch {
+      return 'That does not look like a valid URL';
+    }
+    return null;
+  }
+
+  if (kind === 'quote') {
+    const excerpt = typeof body.excerpt === 'string' ? body.excerpt.trim() : '';
+    if (excerpt.length < 3) return 'A quote needs the excerpt being quoted';
+    return null;
+  }
+
+  if (kind === 'user') {
+    const excerpt = typeof body.excerpt === 'string' ? body.excerpt.trim() : '';
+    if (excerpt.length < 3) return 'Your note cannot be empty';
+    return null;
+  }
+
+  if (kind === 'file') {
+    const fileName = typeof body.fileName === 'string' ? body.fileName.trim() : '';
+    const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim() : '';
+    const data = typeof body.data === 'string' ? body.data.trim() : '';
+    const sizeBytes = typeof body.sizeBytes === 'number' ? body.sizeBytes : 0;
+
+    if (!fileName) return 'The file has no name';
+    if (!mimeType) return 'The file has no type';
+    if (!ALLOWED_EVIDENCE_MIME_TYPES.has(mimeType.toLowerCase())) return `Files of type "${mimeType}" are not accepted as evidence`;
+    if (!data.startsWith('data:')) return 'The file payload is missing or is not a data URI';
+    if (sizeBytes > MAX_EVIDENCE_FILE_BYTES) return `Files are limited to ${Math.round(MAX_EVIDENCE_FILE_BYTES / (1024 * 1024))} MB`;
+    // A data URI's base64 segment is ~4/3 the raw size; bound it the same way.
+    const base64 = data.split(',')[1] || '';
+    if (Math.ceil((base64.length * 3) / 4) > MAX_EVIDENCE_FILE_BYTES) return `Files are limited to ${Math.round(MAX_EVIDENCE_FILE_BYTES / (1024 * 1024))} MB`;
+    return null;
+  }
+
+  return 'Unknown evidence kind';
+}
+
+// List the evidence attached to one claim.
+router.get('/messages/:conversationId/claims/:claimId/evidence', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadClaimContext(req, res, req.params.conversationId, req.params.claimId);
+    if (!ctx) return;
+
+    const evidence = await db.getEvidenceForClaim(ctx.conversation.id, ctx.claim.id);
+    return res.status(200).json({ evidence });
+  } catch (err: any) {
+    console.error('Error fetching evidence:', err);
+    return res.status(500).json({ error: 'Failed to retrieve evidence' });
+  }
+});
+
+// Evidence for both sides of a contradiction, in one round trip — the detail
+// view weighs them side by side while the room decides.
+router.get('/messages/:conversationId/relations/:relationId/evidence', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadRelationContext(req, res, req.params.conversationId, req.params.relationId);
+    if (!ctx) return;
+
+    const evidence = await db.getEvidenceForClaims(ctx.conversation.id, [ctx.relation.claimAId, ctx.relation.claimBId]);
+    return res.status(200).json({
+      claimAId: ctx.relation.claimAId,
+      claimBId: ctx.relation.claimBId,
+      evidence
+    });
+  } catch (err: any) {
+    console.error('Error fetching contradiction evidence:', err);
+    return res.status(500).json({ error: 'Failed to retrieve evidence' });
+  }
+});
+
+// Attach one piece of evidence to a claim. Workspace members only.
+router.post('/messages/:conversationId/claims/:claimId/evidence', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadClaimContext(req, res, req.params.conversationId, req.params.claimId);
+    if (!ctx) return;
+
+    const parsed = attachEvidenceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid evidence' });
+    }
+    const body = parsed.data;
+
+    const kindError = validateEvidenceFields(body.kind, body);
+    if (kindError) return res.status(400).json({ error: kindError });
+
+    const evidence: Evidence = {
+      id: generateUUID(),
+      claimId: ctx.claim.id,
+      conversationId: ctx.conversation.id,
+      kind: body.kind,
+      title: body.title.trim(),
+      url: body.kind === 'url' ? (body.url as string).trim() : null,
+      fileName: body.kind === 'file' ? (body.fileName as string).trim() : null,
+      mimeType: body.kind === 'file' ? (body.mimeType as string).trim() : null,
+      sizeBytes: body.kind === 'file' ? (body.sizeBytes ?? null) : null,
+      data: body.kind === 'file' ? (body.data as string) : null,
+      excerpt: body.kind === 'quote' || body.kind === 'user' ? (body.excerpt as string).trim() : null,
+      source: body.kind === 'quote' && typeof body.source === 'string' ? body.source.trim() : null,
+      aiGenerated: false,
+      authorId: req.user!.id,
+      authorName: req.user!.name,
+      createdAt: new Date().toISOString()
+    };
+
+    const saved = await db.createEvidence(evidence);
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-added', {
+      claimId: ctx.claim.id,
+      evidence: saved
+    });
+
+    // A person put something real behind a claim — the pivot the whole gate
+    // turns on, and the event the replay most wants to show.
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'evidence-added',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Evidence attached',
+      detail: `Attached “${saved.title}” (${saved.kind}) to a claim.`,
+      claimIds: [ctx.claim.id],
+      evidenceId: saved.id,
+      meta: { title: saved.title, kind: saved.kind, aiGenerated: false, claimText: ctx.claim.text }
+    });
+
+    return res.status(201).json(saved);
+  } catch (err: any) {
+    console.error('Error attaching evidence:', err);
+    return res.status(500).json({ error: 'Failed to attach the evidence' });
+  }
+});
+
+// Ask a model to produce a reference for a claim, grounded in the response the
+// claim was extracted from. The reference is created with no author and an
+// unverified label, and is stored only if its quote is verbatim in the source.
+router.post('/messages/:conversationId/claims/:claimId/evidence/ai-reference', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadClaimContext(req, res, req.params.conversationId, req.params.claimId);
+    if (!ctx) return;
+
+    // The claim's source response is the entire universe the model may quote.
+    const message = await db.getMessageById(ctx.claim.messageId);
+    const sourceText = message?.modelResponses?.[ctx.claim.modelKey]?.content || '';
+    if (!sourceText.trim()) {
+      return res.status(409).json({ error: 'The response this claim came from is no longer available' });
+    }
+
+    const outcome = await generateAiReference(ctx.claim, sourceText);
+    // Note: the project does not compile with strictNullChecks, where
+    // `!outcome.ok` fails to narrow this boolean-literal union; the explicit
+    // comparison narrows in both modes.
+    if (outcome.ok === false) {
+      // 422: the request was understood but the model could not produce a
+      // reference worth storing. Nothing is fabricated.
+      return res.status(422).json({ error: outcome.reason });
+    }
+
+    const evidence: Evidence = {
+      id: generateUUID(),
+      claimId: ctx.claim.id,
+      conversationId: ctx.conversation.id,
+      kind: 'ai',
+      title: `AI reference — ${outcome.reference.modelName}`,
+      excerpt: outcome.reference.excerpt,
+      source: `Generated by ${outcome.reference.modelName} from the source response`,
+      aiGenerated: true,
+      modelName: outcome.reference.modelName,
+      authorId: null,
+      authorName: null,
+      createdAt: new Date().toISOString()
+    };
+
+    const saved = await db.createEvidence(evidence);
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-added', {
+      claimId: ctx.claim.id,
+      evidence: saved
+    });
+
+    // Recorded, but flagged as model-generated: an AI reference is a lead, not
+    // proof, and the replay must never show one as evidence a person stood
+    // behind. The gate ignores these for exactly the same reason.
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'evidence-added',
+      actorId: null,
+      actorName: outcome.reference.modelName,
+      title: 'AI reference added',
+      detail: `Asked ${outcome.reference.modelName} for a reference grounded in the claim's own source.`,
+      claimIds: [ctx.claim.id],
+      evidenceId: saved.id,
+      meta: { title: saved.title, kind: 'ai', aiGenerated: true, claimText: ctx.claim.text, unverified: true }
+    });
+
+    return res.status(201).json(saved);
+  } catch (err: any) {
+    console.error('Error generating an AI reference:', err);
+    return res.status(500).json({ error: 'Failed to generate the reference' });
+  }
+});
+
+// Delete one piece of evidence. Authors delete their own; the workspace owner
+// and admins delete anyone's. AI references have no author, so they are
+// moderator-only — members can ask for a fresh one instead.
+router.delete('/messages/:conversationId/claims/:claimId/evidence/:evidenceId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadClaimContext(req, res, req.params.conversationId, req.params.claimId);
+    if (!ctx) return;
+
+    const existing = await db.getEvidenceById(ctx.conversation.id, req.params.evidenceId);
+    if (!existing) {
+      return res.status(404).json({ error: 'Evidence not found on this claim' });
+    }
+
+    const moderator = ctx.workspace.ownerId === req.user!.id || req.user!.role === 'admin';
+    if (!moderator && existing.authorId !== req.user!.id) {
+      return res.status(403).json({ error: 'You can only delete evidence you added' });
+    }
+
+    const deleted = await db.deleteEvidence(ctx.conversation.id, req.params.evidenceId, req.user!.id, moderator);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Evidence not found on this claim' });
+    }
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-deleted', {
+      claimId: ctx.claim.id,
+      evidenceId: req.params.evidenceId
+    });
+
+    // The removal is part of the story too — a room that took evidence back off
+    // a claim has changed what the decision rests on.
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      kind: 'evidence-deleted',
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Evidence removed',
+      detail: `Removed evidence from a claim.`,
+      claimIds: [ctx.claim.id],
+      evidenceId: req.params.evidenceId,
+      meta: { title: existing.title, aiGenerated: existing.aiGenerated }
+    });
+
+    return res.status(200).json({ evidenceId: req.params.evidenceId });
+  } catch (err: any) {
+    console.error('Error deleting evidence:', err);
+    return res.status(500).json({ error: 'Failed to delete the evidence' });
+  }
+});
+
+// ─── DECISIONS & THE EVIDENCE GATE ──────────────────────────────────────
+// A room's formal commitment, and the gate that has to open before it can be
+// finalized.
+//
+// The gate is enforced HERE, in the route, on every finalize attempt — never in
+// the client. The client is handed the same verdict to display, but a request
+// that bypasses the UI (curl, a hand-rolled script, a tampered button) is
+// re-evaluated against the database and refused with 409 + the reasons.
+//
+// Editing is restricted to the decision's author, the workspace owner, or an
+// admin. Finalizing is owner-or-admin, matching who can close a contradiction:
+// the same person the room trusts to adjudicate. Approving is open to the
+// required approvers only.
+//
+// Once finalized the record is locked: the only way back is `reopen`, which
+// restores `draft` but appends a visible entry to the history rather than
+// erasing the finalization. Nothing in the system ever edits or deletes a
+// history entry.
+
+/** Loads a decision, confirms it belongs to the room in the URL, and confirms
+ * the caller is a member of that room's workspace. Decisions are scoped through
+ * the room exactly like claims and evidence. */
+async function loadDecisionContext(
+  req: AuthenticatedRequest,
+  res: Response,
+  conversationId: string,
+  decisionId: string
+): Promise<{ decision: Decision; conversation: Conversation; workspace: Workspace } | null> {
+  const decision = await db.getDecisionById(conversationId, decisionId);
+  if (!decision) {
+    res.status(404).json({ error: 'Decision not found in this room' });
+    return null;
+  }
+
+  const conversation = await db.getConversationById(conversationId);
+  if (!conversation) {
+    res.status(404).json({ error: 'Room not found' });
+    return null;
+  }
+
+  const workspace = await db.getWorkspaceById(conversation.workspaceId);
+  if (!workspace) {
+    res.status(404).json({ error: 'Workspace not found' });
+    return null;
+  }
+
+  const isMember = workspace.ownerId === req.user!.id || (workspace.memberIds || []).includes(req.user!.id);
+  const isAdmin = req.user!.role === 'admin';
+  if (!isMember && !isAdmin) {
+    res.status(403).json({ error: 'Only workspace members can view or work on decisions in this room' });
+    return null;
+  }
+
+  return { decision, conversation, workspace };
+}
+
+/** True when the caller may edit or finalize the decision. */
+function canManageDecision(
+  decision: Decision,
+  workspace: Workspace,
+  user: { id: string; role: string }
+): boolean {
+  return (
+    decision.createdBy === user.id ||
+    workspace.ownerId === user.id ||
+    user.role === 'admin'
+  );
+}
+
+/**
+ * Computes the gate verdict from the database. Shared by the read endpoint
+ * (show the room what is blocking) and the finalize endpoint (decide whether to
+ * let it through), so the two can never disagree.
+ */
+async function computeGate(conversationId: string, decision: Decision): Promise<DecisionGateResult> {
+  const [claims, relations, evidenceByClaim] = await Promise.all([
+    db.getClaims(conversationId, 200),
+    db.getClaimRelations(conversationId, 200),
+    db.getEvidenceForClaims(conversationId, decision.claimIds)
+  ]);
+  return evaluateDecisionGate(decision, claims, relations, evidenceByClaim);
+}
+
+// List a room's decisions.
+router.get('/messages/:conversationId/decisions', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const conv = await loadConversationForRequest(req, res, req.params.conversationId);
+    if (!conv) return;
+
+    const decisions = await db.getDecisions(conv.id);
+    return res.status(200).json({ decisions });
+  } catch (err: any) {
+    console.error('Error fetching decisions:', err);
+    return res.status(500).json({ error: 'Failed to retrieve decisions' });
+  }
+});
+
+// One decision, with its current gate verdict — the room's "what is blocking
+// finalization" read.
+router.get('/messages/:conversationId/decisions/:decisionId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    const gate = await computeGate(ctx.conversation.id, ctx.decision);
+    return res.status(200).json({ decision: ctx.decision, gate });
+  } catch (err: any) {
+    console.error('Error fetching decision:', err);
+    return res.status(500).json({ error: 'Failed to retrieve the decision' });
+  }
+});
+
+/**
+ * The decision's replay timeline: the events that formed it, each paired with
+ * the decision's state at that moment. The events were recorded as the room
+ * worked; the state is folded here, server-side, so the client only ever
+ * renders what the server derived.
+ */
+router.get('/messages/:conversationId/decisions/:decisionId/timeline', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    const [claims, relations, events] = await Promise.all([
+      db.getClaims(ctx.conversation.id, 300),
+      db.getClaimRelations(ctx.conversation.id, 300),
+      db.getTimelineEvents(ctx.conversation.id)
+    ]);
+
+    const replay = buildDecisionReplay(ctx.decision, claims, relations, events);
+    return res.status(200).json(replay);
+  } catch (err: any) {
+    console.error('Error building the decision timeline:', err);
+    return res.status(500).json({ error: 'Failed to build the replay timeline' });
+  }
+});
+
+/**
+ * The room's members, resolved to names, for the summary's participant and
+ * approval sections.
+ */
+async function loadWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
+  const ws = await db.getWorkspaceById(workspaceId);
+  const ids = [...new Set([...(ws?.memberIds ?? []), ...(ws ? [ws.ownerId] : [])])];
+  if (ids.length === 0) return [];
+  const users = await db.getUsersByIds(ids);
+  return users.map((u) => ({ id: u.id, name: u.name }));
+}
+
+/**
+ * The final decision summary — a read-only report of what the room decided
+ * and what it rested on, assembled entirely from stored data.
+ *
+ * With `narrate=true` the structured summary is also restated in prose by
+ * Gemini, under a prompt that forbids invention. The prose is a convenience
+ * layer over the fields, never a substitute: the model receives only the
+ * summary itself, and if the model is unreachable the summary is returned
+ * unchanged with a note saying so, rather than with text invented to fill
+ * the gap.
+ */
+router.get('/messages/:conversationId/decisions/:decisionId/summary', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    const [claims, relations, evidenceByClaim, members] = await Promise.all([
+      db.getClaims(ctx.conversation.id, 300),
+      db.getClaimRelations(ctx.conversation.id, 300),
+      db.getEvidenceForClaims(ctx.conversation.id, ctx.decision.claimIds),
+      loadWorkspaceMembers(ctx.workspace.id)
+    ]);
+
+    const summary = buildDecisionSummary(
+      ctx.decision,
+      ctx.conversation.title,
+      claims,
+      relations,
+      evidenceByClaim,
+      members
+    );
+
+    const narrate = req.query?.narrate === 'true';
+    if (narrate) {
+      db.logAudit(
+        req.user!.id,
+        req.user!.name,
+        req.user!.email,
+        'AI_SUMMARY_NARRATE',
+        `Requested an AI narration of decision ${ctx.decision.id}`,
+        ctx.workspace.id
+      ).catch(() => {});
+      const narrative = await getGeminiTextResponseOrNull(buildSummaryNarrationPrompt(summary));
+      summary.narrative = narrative;
+      summary.narrativeNote = narrative
+        ? 'Restated by Gemini from the record above — it was given those fields and instructed to add nothing.'
+        : 'No narration is available right now (Gemini is unconfigured or its quota is exhausted). The sections above are the complete record.';
+    }
+
+    return res.status(200).json(summary);
+  } catch (err: any) {
+    console.error('Error building the decision summary:', err);
+    return res.status(500).json({ error: 'Failed to build the decision summary' });
+  }
+});
+
+// Create a decision. Any workspace member can draft one; the gate decides when
+// it may be finalized, not who wrote it.
+router.post('/messages/:conversationId/decisions', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const conv = await loadConversationForRequest(req, res, req.params.conversationId);
+    if (!conv) return;
+
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const statement = typeof req.body?.statement === 'string' ? req.body.statement.trim() : '';
+    if (title.length < 3) {
+      return res.status(400).json({ error: 'A decision needs a title of at least 3 characters' });
+    }
+    if (statement.length < 10) {
+      return res.status(400).json({ error: 'A decision needs a statement of at least 10 characters' });
+    }
+
+    // Linked claims must genuinely belong to this room.
+    const requestedClaims: string[] = Array.isArray(req.body?.claimIds)
+      ? req.body.claimIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    const roomClaims = await db.getClaims(conv.id, 200);
+    const validClaimIds = new Set(roomClaims.map((c) => c.id));
+    const claimIds = requestedClaims.filter((id: string) => validClaimIds.has(id));
+
+    // Approvers must be real members of the workspace.
+    const requestedApprovers: string[] = Array.isArray(req.body?.requiredApproverIds)
+      ? req.body.requiredApproverIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    const ws = await db.getWorkspaceById(conv.workspaceId);
+    const memberIds = new Set([ws?.ownerId, ...(ws?.memberIds || [])]);
+    const requiredApproverIds = requestedApprovers.filter((id: string) => memberIds.has(id));
+
+    const now = new Date().toISOString();
+    const decisionId = generateUUID();
+    const decision: Decision = {
+      id: decisionId,
+      conversationId: conv.id,
+      title,
+      statement,
+      claimIds,
+      requiredApproverIds,
+      approvals: [],
+      status: 'draft',
+      createdBy: req.user!.id,
+      createdByName: req.user!.name,
+      finalizedAt: null,
+      finalizedBy: null,
+      finalizedByName: null,
+      history: [{
+        action: 'created',
+        actorId: req.user!.id,
+        actorName: req.user!.name,
+        detail: `Drafted decision “${title}”.`,
+        at: now
+      }],
+      createdAt: now
+    };
+
+    const saved = await db.createDecision(decision);
+
+    // The timeline entry that mirrors the seed history entry above, carrying
+    // the claim and approver ids the replay needs to draw the decision's
+    // starting state.
+    await db.recordTimelineEvent({
+      conversationId: conv.id,
+      decisionId: saved.id,
+      kind: 'decision-created',
+      at: now,
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Decision created',
+      detail: `Drafted decision “${title}”.`,
+      claimIds,
+      memberIds: requiredApproverIds,
+      meta: {
+        claims: claimIds.map((id) => {
+          const c = roomClaims.find((x) => x.id === id);
+          return { id, text: c?.text ?? id, modelName: c?.modelName ?? 'a model' };
+        })
+      }
+    });
+
+    await db.logAudit(
+      req.user!.id,
+      req.user!.name,
+      req.user!.email,
+      'DECISION_CREATED',
+      `Created decision “${title}” in room "${conv.title}"`,
+      conv.workspaceId,
+      req.ip
+    );
+
+    emitDiscussionEvent(conv.id, conv.workspaceId, 'decision-created', { decision: saved });
+
+    return res.status(201).json({ decision: saved });
+  } catch (err: any) {
+    console.error('Error creating decision:', err);
+    return res.status(500).json({ error: 'Failed to create the decision' });
+  }
+});
+
+// Edit a draft's title or statement. Finalized decisions are locked.
+router.patch('/messages/:conversationId/decisions/:decisionId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (!canManageDecision(ctx.decision, ctx.workspace, req.user!)) {
+      return res.status(403).json({ error: 'Only the decision author, the workspace owner, or an admin can edit this decision' });
+    }
+
+    if (ctx.decision.status !== 'draft') {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : undefined;
+    const statement = typeof req.body?.statement === 'string' ? req.body.statement.trim() : undefined;
+    if (title !== undefined && title.length < 3) {
+      return res.status(400).json({ error: 'A decision title needs at least 3 characters' });
+    }
+    if (statement !== undefined && statement.length < 10) {
+      return res.status(400).json({ error: 'A decision statement needs at least 10 characters' });
+    }
+
+    const updated = await db.editDecision(ctx.conversation.id, ctx.decision.id, { title, statement });
+    if (!updated) {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const changes: string[] = [];
+    if (title && title !== ctx.decision.title) changes.push(`title → “${title}”`);
+    if (statement && statement !== ctx.decision.statement) changes.push('statement updated');
+    if (changes.length > 0) {
+      await db.recordDecisionEvent(ctx.conversation.id, updated.id, {
+        action: 'statement-edited',
+        actorId: req.user!.id,
+        actorName: req.user!.name,
+        detail: changes.join(', '),
+        at: new Date().toISOString()
+      });
+    }
+
+    const refreshed = await db.getDecisionById(ctx.conversation.id, updated.id);
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-updated', { decision: refreshed });
+
+    return res.status(200).json({ decision: refreshed });
+  } catch (err: any) {
+    console.error('Error editing decision:', err);
+    return res.status(500).json({ error: 'Failed to edit the decision' });
+  }
+});
+
+// Set the claims a decision rests on. Drafts only.
+router.put('/messages/:conversationId/decisions/:decisionId/claims', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (!canManageDecision(ctx.decision, ctx.workspace, req.user!)) {
+      return res.status(403).json({ error: 'Only the decision author, the workspace owner, or an admin can edit this decision' });
+    }
+
+    if (ctx.decision.status !== 'draft') {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const requested: string[] = Array.isArray(req.body?.claimIds)
+      ? req.body.claimIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    const roomClaims = await db.getClaims(ctx.conversation.id, 200);
+    const valid = new Set(roomClaims.map((c) => c.id));
+    const claimIds = requested.filter((id: string) => valid.has(id));
+
+    const updated = await db.setDecisionClaims(ctx.conversation.id, ctx.decision.id, claimIds);
+    if (!updated) {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const added = claimIds.filter((id) => !ctx.decision.claimIds.includes(id));
+    const removed = ctx.decision.claimIds.filter((id) => !claimIds.includes(id));
+    const now = new Date().toISOString();
+    for (const id of added) {
+      const c = roomClaims.find((x) => x.id === id);
+      await db.recordDecisionEvent(
+        ctx.conversation.id,
+        updated.id,
+        {
+          action: 'claim-linked',
+          actorId: req.user!.id,
+          actorName: req.user!.name,
+          detail: `Linked claim: ${c?.text ?? id}`,
+          at: now
+        },
+        // The claim's text and model are carried on the event itself: the
+        // replay must still show what the room linked if the claim is later
+        // deleted, and the human-readable detail is no place to hide an id.
+        { claimIds: [id], meta: { claims: [{ id, text: c?.text ?? id, modelName: c?.modelName ?? 'a model' }] } }
+      );
+    }
+    for (const id of removed) {
+      const c = roomClaims.find((x) => x.id === id);
+      await db.recordDecisionEvent(
+        ctx.conversation.id,
+        updated.id,
+        {
+          action: 'claim-unlinked',
+          actorId: req.user!.id,
+          actorName: req.user!.name,
+          detail: `Unlinked claim: ${c?.text ?? id}`,
+          at: now
+        },
+        { claimIds: [id] }
+      );
+    }
+
+    const refreshed = await db.getDecisionById(ctx.conversation.id, updated.id);
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-updated', { decision: refreshed });
+
+    return res.status(200).json({ decision: refreshed });
+  } catch (err: any) {
+    console.error('Error linking decision claims:', err);
+    return res.status(500).json({ error: 'Failed to update the decision claims' });
+  }
+});
+
+// Set which members must approve. Drafts only.
+router.put('/messages/:conversationId/decisions/:decisionId/approvers', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (!canManageDecision(ctx.decision, ctx.workspace, req.user!)) {
+      return res.status(403).json({ error: 'Only the decision author, the workspace owner, or an admin can edit this decision' });
+    }
+
+    if (ctx.decision.status !== 'draft') {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const requested: string[] = Array.isArray(req.body?.requiredApproverIds)
+      ? req.body.requiredApproverIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    const memberIds = new Set([ctx.workspace.ownerId, ...(ctx.workspace.memberIds || [])]);
+    const requiredApproverIds = requested.filter((id: string) => memberIds.has(id));
+
+    const updated = await db.setDecisionApprovers(ctx.conversation.id, ctx.decision.id, requiredApproverIds);
+    if (!updated) {
+      return res.status(409).json({ error: 'This decision is finalized and locked. Reopen it to make changes.' });
+    }
+
+    const added = requiredApproverIds.filter((id) => !ctx.decision.requiredApproverIds.includes(id));
+    const removed = ctx.decision.requiredApproverIds.filter((id) => !requiredApproverIds.includes(id));
+    // Names for the history detail, which shows the member's name rather than
+    // a bare id.
+    const named = added.length || removed.length
+      ? await db.getUsersByIds([...added, ...removed])
+      : [];
+    const nameOf = (id: string): string => named.find((u) => u.id === id)?.name ?? id;
+    const now = new Date().toISOString();
+    for (const id of added) {
+      await db.recordDecisionEvent(
+        ctx.conversation.id,
+        updated.id,
+        {
+          action: 'approver-added',
+          actorId: req.user!.id,
+          actorName: req.user!.name,
+          detail: `Added required approver ${nameOf(id)}`,
+          at: now
+        },
+        { memberIds: [id], meta: { memberName: nameOf(id) } }
+      );
+    }
+    for (const id of removed) {
+      await db.recordDecisionEvent(
+        ctx.conversation.id,
+        updated.id,
+        {
+          action: 'approver-removed',
+          actorId: req.user!.id,
+          actorName: req.user!.name,
+          detail: `Removed required approver ${nameOf(id)}`,
+          at: now
+        },
+        { memberIds: [id], meta: { memberName: nameOf(id) } }
+      );
+    }
+
+    const refreshed = await db.getDecisionById(ctx.conversation.id, updated.id);
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-updated', { decision: refreshed });
+
+    return res.status(200).json({ decision: refreshed });
+  } catch (err: any) {
+    console.error('Error setting decision approvers:', err);
+    return res.status(500).json({ error: 'Failed to update the required approvers' });
+  }
+});
+
+// Give an approval. Only a required approver can, and only while the decision
+// is still a draft — approving something already locked is meaningless.
+router.post('/messages/:conversationId/decisions/:decisionId/approve', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (!ctx.decision.requiredApproverIds.includes(req.user!.id) && ctx.workspace.ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'You are not a required approver for this decision' });
+    }
+
+    if (ctx.decision.status !== 'draft') {
+      return res.status(409).json({ error: 'This decision is already finalized' });
+    }
+
+    const updated = await db.approveDecision(ctx.conversation.id, ctx.decision.id, req.user!.id, req.user!.name);
+    if (!updated) {
+      return res.status(409).json({ error: 'This decision is already finalized' });
+    }
+
+    // Idempotent: only record history when this is a new or changed approval.
+    const previous = ctx.decision.approvals.find((a) => a.userId === req.user!.id);
+    if (!previous) {
+      await db.recordDecisionEvent(ctx.conversation.id, updated.id, {
+        action: 'approval-given',
+        actorId: req.user!.id,
+        actorName: req.user!.name,
+        detail: 'Approved the decision.',
+        at: new Date().toISOString()
+      });
+    }
+
+    const refreshed = await db.getDecisionById(ctx.conversation.id, updated.id);
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-updated', { decision: refreshed });
+
+    return res.status(200).json({ decision: refreshed });
+  } catch (err: any) {
+    console.error('Error approving decision:', err);
+    return res.status(500).json({ error: 'Failed to record the approval' });
+  }
+});
+
+// Withdraw an approval. Approvers may change their mind while the decision is
+// still open; the withdrawal is recorded, not erased.
+router.delete('/messages/:conversationId/decisions/:decisionId/approve', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (ctx.decision.status !== 'draft') {
+      return res.status(409).json({ error: 'This decision is already finalized' });
+    }
+
+    const updated = await db.withdrawApproval(ctx.conversation.id, ctx.decision.id, req.user!.id);
+    if (!updated) {
+      return res.status(409).json({ error: 'This decision is already finalized' });
+    }
+
+    const had = ctx.decision.approvals.some((a) => a.userId === req.user!.id);
+    if (had) {
+      await db.recordDecisionEvent(ctx.conversation.id, updated.id, {
+        action: 'approval-withdrawn',
+        actorId: req.user!.id,
+        actorName: req.user!.name,
+        detail: 'Withdrew their approval.',
+        at: new Date().toISOString()
+      });
+    }
+
+    const refreshed = await db.getDecisionById(ctx.conversation.id, updated.id);
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-updated', { decision: refreshed });
+
+    return res.status(200).json({ decision: refreshed });
+  } catch (err: any) {
+    console.error('Error withdrawing approval:', err);
+    return res.status(500).json({ error: 'Failed to withdraw the approval' });
+  }
+});
+
+/**
+ * Finalize a decision.
+ *
+ * THE GATE IS ENFORCED HERE. Whatever the client believes, this route recomputes
+ * the verdict from the database and refuses with 409 + the full blocker list if
+ * any condition fails. This is what makes the gate real rather than cosmetic:
+ * a hand-rolled POST that skips the UI cannot get through.
+ */
+router.post('/messages/:conversationId/decisions/:decisionId/finalize', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (!canManageDecision(ctx.decision, ctx.workspace, req.user!)) {
+      return res.status(403).json({ error: 'Only the decision author, the workspace owner, or an admin can finalize this decision' });
+    }
+
+    if (ctx.decision.status === 'finalized') {
+      return res.status(409).json({ error: 'This decision is already finalized' });
+    }
+
+    // Recompute the gate from live room state — the client's say-so is not
+    // consulted, and the blockers are returned so the room can see exactly
+    // what is still in the way.
+    const gate = await computeGate(ctx.conversation.id, ctx.decision);
+    if (!gate.ready) {
+      return res.status(409).json({
+        error: 'The evidence gate is not satisfied',
+        gate,
+        blockers: gate.blockers
+      });
+    }
+
+    const finalized = await db.finalizeDecision(ctx.conversation.id, ctx.decision.id, {
+      id: req.user!.id,
+      name: req.user!.name
+    });
+    if (!finalized) {
+      return res.status(409).json({ error: 'This decision is no longer a draft' });
+    }
+
+    // `db.finalizeDecision` appended the history entry above; this is its
+    // counterpart on the timeline, timed to the same moment.
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      decisionId: finalized.id,
+      kind: 'decision-finalized',
+      at: finalized.finalizedAt ?? new Date().toISOString(),
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Finalized',
+      detail: 'Finalized — every gate condition was satisfied.',
+      claimIds: finalized.claimIds,
+      meta: { finalizedAt: finalized.finalizedAt }
+    });
+
+    await db.logAudit(
+      req.user!.id,
+      req.user!.name,
+      req.user!.email,
+      'DECISION_FINALIZED',
+      `Finalized decision “${ctx.decision.title}” in room "${ctx.conversation.title}"`,
+      ctx.workspace.id,
+      req.ip
+    );
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-finalized', { decision: finalized });
+
+    return res.status(200).json({ decision: finalized, gate });
+  } catch (err: any) {
+    console.error('Error finalizing decision:', err);
+    return res.status(500).json({ error: 'Failed to finalize the decision' });
+  }
+});
+
+/**
+ * Reopen a finalized decision. Owner-or-admin only, and the reason is
+ * mandatory. Reopening restores `draft` but leaves the original finalization in
+ * the history — so the record always shows the decision was locked, by whom,
+ * and why it was reopened. Nothing about the decision is ever silently undone.
+ */
+router.post('/messages/:conversationId/decisions/:decisionId/reopen', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (ctx.workspace.ownerId !== req.user!.id && req.user!.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the workspace owner or an admin can reopen a finalized decision' });
+    }
+
+    if (ctx.decision.status !== 'finalized') {
+      return res.status(409).json({ error: 'Only a finalized decision can be reopened' });
+    }
+
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 3) {
+      return res.status(400).json({ error: 'A short reason is required to reopen a finalized decision' });
+    }
+
+    const reopened = await db.reopenDecision(ctx.conversation.id, ctx.decision.id, {
+      id: req.user!.id,
+      name: req.user!.name
+    }, reason);
+    if (!reopened) {
+      return res.status(409).json({ error: 'This decision is not finalized' });
+    }
+
+    await db.recordTimelineEvent({
+      conversationId: ctx.conversation.id,
+      decisionId: reopened.id,
+      kind: 'decision-reopened',
+      at: new Date().toISOString(),
+      actorId: req.user!.id,
+      actorName: req.user!.name,
+      title: 'Reopened',
+      detail: `Reopened: ${reason}`,
+      meta: { reason }
+    });
+
+    await db.logAudit(
+      req.user!.id,
+      req.user!.name,
+      req.user!.email,
+      'DECISION_REOPENED',
+      `Reopened decision “${ctx.decision.title}” in room "${ctx.conversation.title}": ${reason}`,
+      ctx.workspace.id,
+      req.ip
+    );
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-reopened', { decision: reopened });
+
+    return res.status(200).json({ decision: reopened });
+  } catch (err: any) {
+    console.error('Error reopening decision:', err);
+    return res.status(500).json({ error: 'Failed to reopen the decision' });
+  }
+});
+
+// Delete a draft. A finalized decision can be deleted only by the owner or an
+// admin — and the deletion itself is audited, so a locked record can never just
+// vanish from the room's history.
+router.delete('/messages/:conversationId/decisions/:decisionId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await loadDecisionContext(req, res, req.params.conversationId, req.params.decisionId);
+    if (!ctx) return;
+
+    if (ctx.decision.status === 'finalized') {
+      if (ctx.workspace.ownerId !== req.user!.id && req.user!.role !== 'admin') {
+        return res.status(403).json({ error: 'A finalized decision can only be removed by the workspace owner or an admin' });
+      }
+    } else if (!canManageDecision(ctx.decision, ctx.workspace, req.user!)) {
+      return res.status(403).json({ error: 'Only the decision author, the workspace owner, or an admin can delete this decision' });
+    }
+
+    const deleted = await db.deleteDecision(ctx.conversation.id, ctx.decision.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Decision not found in this room' });
+    }
+
+    // The decision's own lifecycle events leave the room's stream with it —
+    // room-level events that touched its claims remain, as part of the room's
+    // record.
+    await db.deleteDecisionTimelineEvents(ctx.decision.id);
+
+    await db.logAudit(
+      req.user!.id,
+      req.user!.name,
+      req.user!.email,
+      'DECISION_DELETED',
+      `Deleted decision “${ctx.decision.title}” in room "${ctx.conversation.title}"`,
+      ctx.workspace.id,
+      req.ip
+    );
+
+    emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'decision-deleted', { decisionId: ctx.decision.id });
+
+    return res.status(200).json({ decisionId: ctx.decision.id });
+  } catch (err: any) {
+    console.error('Error deleting decision:', err);
+    return res.status(500).json({ error: 'Failed to delete the decision' });
+  }
+});
 
 // --- SAVED RESPONSES ROUTER ---
 // Get saved responses for workspace

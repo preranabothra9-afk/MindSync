@@ -1,8 +1,24 @@
 import mongoose, { Schema } from 'mongoose';
 import fs from 'fs';
 import path from 'path';
-import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionDiscussion } from '../src/types';
+import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionDiscussion, Evidence, Decision, DecisionHistoryEntry, TimelineEvent, TimelineEventKind } from '../src/types';
 import { generateUUID } from './auth';
+import { historyActionToTimelineKind, historyActionLabel } from './decisions';
+
+/** Order-preserving dedupe for id lists coming off the wire. */
+function dedupeIds(ids?: string[] | null): string[] {
+  if (!ids) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const v = typeof id === 'string' ? id.trim() : '';
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
+}
 
 // Connection function for live remote environment deployment
 let connectPromise: Promise<void> | null = null;
@@ -186,12 +202,15 @@ const ClaimRelationSchema = new Schema({
   resolvedBy: { type: String, default: null },
   resolvedByName: { type: String, default: null },
   resolvedAt: { type: String, default: null },
+  // Evidence ids the closer cited while resolving. Kept as ids rather than
+  // copies so deleting a piece of evidence can't leave a ghost record behind;
+  // readers filter out ids that no longer resolve.
+  citedEvidenceIds: { type: [String], default: [] },
   createdAt: { type: String, default: () => new Date().toISOString(), index: true }
 }, {
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
-
 // Enforces one relationship per claim pair regardless of detection direction.
 ClaimRelationSchema.index({ claimAId: 1, claimBId: 1 }, { unique: true });
 
@@ -232,6 +251,73 @@ const ContradictionVoteSchema = new Schema({
 // Enforces one vote per user per contradiction.
 ContradictionVoteSchema.index({ relationId: 1, userId: 1 }, { unique: true });
 
+// Decision Schema
+// A room's formal commitment — the artifact the evidence gate protects. It
+// links the load-bearing claims, records who must approve, and keeps an
+// append-only history so the decision's trajectory is always reconstructable.
+//
+// `status` only ever moves draft → finalized. Reopening writes `draft` back but
+// leaves the finalization entry in `history`, so nothing is ever silently
+// undone. All history mutation is additive; no code path edits or deletes an
+// entry.
+const DecisionSchema = new Schema({
+  _id: { type: String, default: generateUUID },
+  conversationId: { type: String, required: true, index: true },
+  title: { type: String, required: true },
+  statement: { type: String, required: true },
+  // Claims the gate holds to the evidence requirement.
+  claimIds: { type: [String], default: [] },
+  // Members whose sign-off is required before finalization.
+  requiredApproverIds: { type: [String], default: [] },
+  approvals: { type: [Schema.Types.Mixed], default: [] },
+  status: { type: String, required: true, default: 'draft', enum: ['draft', 'finalized'], index: true },
+  createdBy: { type: String, required: true },
+  createdByName: { type: String, required: true },
+  finalizedAt: { type: String, default: null },
+  finalizedBy: { type: String, default: null },
+  finalizedByName: { type: String, default: null },
+  // Append-only. Readers render it as-is; nothing prunes it.
+  history: { type: [Schema.Types.Mixed], default: [] },
+  createdAt: { type: String, default: () => new Date().toISOString(), index: true }
+}, {
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+
+// Evidence Schema
+// Material a member (or a model) attaches to a claim to back it up or knock it
+// down: a link, a file, a quote, a personal note, or an AI-generated reference.
+// The room's memory stays about *what was established*; evidence is the *why*.
+const EvidenceSchema = new Schema({
+  _id: { type: String, default: generateUUID },
+  claimId: { type: String, required: true, index: true },
+  conversationId: { type: String, required: true, index: true },
+  kind: { type: String, required: true, enum: ['url', 'file', 'quote', 'user', 'ai'], index: true },
+  title: { type: String, required: true },
+  url: { type: String, default: null },
+  fileName: { type: String, default: null },
+  mimeType: { type: String, default: null },
+  sizeBytes: { type: Number, default: null },
+  // Stored inline as a base64 data URI, the same way MessagePart carries
+  // inline images — no separate upload service exists, so files live in the
+  // document they belong to.
+  data: { type: String, default: null },
+  excerpt: { type: String, default: null },
+  source: { type: String, default: null },
+  // AI-generated references are labelled unverified for the lifetime of the
+  // document: they are a model's reading of the source, never proof.
+  aiGenerated: { type: Boolean, required: true, default: false },
+  modelName: { type: String, default: null },
+  authorId: { type: String, default: null },
+  authorName: { type: String, default: null },
+  createdAt: { type: String, default: () => new Date().toISOString(), index: true }
+}, {
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+
 // AuditLog Schema
 const AuditLogSchema = new Schema({  _id: { type: String, default: generateUUID },
   userId: { type: String, index: true },
@@ -247,8 +333,44 @@ const AuditLogSchema = new Schema({  _id: { type: String, default: generateUUID 
   toObject: { virtuals: true }
 });
 
+// TimelineEvent Schema
+// The room's append-only event stream, which the decision replay scrubs
+// through. Every material thing that happened around a decision — a prompt,
+// a model reply, a claim mined from it, a contradiction found or closed,
+// evidence a person attached, a vote, a comment, and the decision's own
+// lifecycle — is one document here. This extends the audit story the
+// AuditLog began: that log records who did what for the admin, this one
+// records the room's narrative in enough detail to replay it.
+const TimelineEventSchema = new Schema({
+  _id: { type: String, default: generateUUID },
+  conversationId: { type: String, required: true, index: true },
+  // Null for room-level events; the decision's id for its own lifecycle.
+  decisionId: { type: String, default: null, index: true },
+  kind: { type: String, required: true, index: true },
+  // When it happened. The timeline is ordered by (at, _id) so positions are
+  // stable across reads — the scrubber's cursor must not move underneath it.
+  at: { type: String, required: true, index: true },
+  actorId: { type: String, default: null },
+  actorName: { type: String, required: true },
+  title: { type: String, required: true },
+  detail: { type: String, required: true },
+  // Refs, all optional, used to reconstruct state and to deep-link.
+  messageId: { type: String, default: null },
+  claimIds: { type: [String], default: [] },
+  relationId: { type: String, default: null },
+  evidenceId: { type: String, default: null },
+  memberIds: { type: [String], default: [] },
+  // Kind-specific extras. Kept loose on purpose: a new field costs no
+  // migration, and renderers read it defensively.
+  meta: { type: Schema.Types.Mixed, default: {} },
+  createdAt: { type: String, default: () => new Date().toISOString() }
+}, {
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
 // Virtual conversions for MERN front-end schema compliance
-for (const schema of [UserSchema, WorkspaceSchema, ConversationSchema, MessageSchema, SavedResponseSchema, ClaimSchema, ClaimRelationSchema, DiscussionCommentSchema, ContradictionVoteSchema, AuditLogSchema]) {
+for (const schema of [UserSchema, WorkspaceSchema, ConversationSchema, MessageSchema, SavedResponseSchema, ClaimSchema, ClaimRelationSchema, DiscussionCommentSchema, ContradictionVoteSchema, DecisionSchema, AuditLogSchema, TimelineEventSchema]) {
   schema.virtual('id').get(function() {
     return this._id;
   });
@@ -264,7 +386,10 @@ export const ClaimModel = (mongoose.models.Claim || mongoose.model('Claim', Clai
 export const ClaimRelationModel = (mongoose.models.ClaimRelation || mongoose.model('ClaimRelation', ClaimRelationSchema)) as any;
 export const DiscussionCommentModel = (mongoose.models.DiscussionComment || mongoose.model('DiscussionComment', DiscussionCommentSchema)) as any;
 export const ContradictionVoteModel = (mongoose.models.ContradictionVote || mongoose.model('ContradictionVote', ContradictionVoteSchema)) as any;
+export const DecisionModel = (mongoose.models.Decision || mongoose.model('Decision', DecisionSchema)) as any;
+export const EvidenceModel = (mongoose.models.Evidence || mongoose.model('Evidence', EvidenceSchema)) as any;
 export const AuditLogModel = (mongoose.models.AuditLog || mongoose.model('AuditLog', AuditLogSchema)) as any;
+export const TimelineEventModel = (mongoose.models.TimelineEvent || mongoose.model('TimelineEvent', TimelineEventSchema)) as any;
 
 // Seed standard workspace if DB is blank (for Mongo mode)
 async function seedDefaultMongoData() {
@@ -344,6 +469,13 @@ class MongoDatabaseAdapter {
     const d = await UserModel.findById(id).lean();
     if (!d) return undefined;
     return { ...d, id: d._id } as unknown as User;
+  }
+
+  /** Several users at once, for the membership rosters the UI renders. */
+  async getUsersByIds(ids: string[]): Promise<User[]> {
+    if (!ids || ids.length === 0) return [];
+    const docs = await UserModel.find({ _id: { $in: ids } }).lean();
+    return docs.map((d: any) => ({ ...d, id: d._id })) as unknown as User[];
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -478,6 +610,10 @@ class MongoDatabaseAdapter {
     // A contradiction's human discussion dies with the room it lived in.
     await DiscussionCommentModel.deleteMany({ conversationId: { $in: conversationIds } });
     await ContradictionVoteModel.deleteMany({ conversationId: { $in: conversationIds } });
+    // ...and so does the evidence that backed its claims.
+    await EvidenceModel.deleteMany({ conversationId: { $in: conversationIds } });
+    // Decisions belong to those rooms too.
+    await DecisionModel.deleteMany({ conversationId: { $in: conversationIds } });
     return true;
   }
 
@@ -520,6 +656,10 @@ class MongoDatabaseAdapter {
     // The room's contradiction discussions go with its contradictions.
     await DiscussionCommentModel.deleteMany({ conversationId: id });
     await ContradictionVoteModel.deleteMany({ conversationId: id });
+    // The evidence backing its claims goes with the room too.
+    await EvidenceModel.deleteMany({ conversationId: id });
+    // The room's decisions go with it.
+    await DecisionModel.deleteMany({ conversationId: id });
     return true;
   }
 
@@ -677,6 +817,51 @@ class MongoDatabaseAdapter {
     return { ...d, id: d._id } as unknown as Message;
   }
 
+  /**
+   * Reaps generations that were still in flight when the previous process died.
+   *
+   * A `pending`/`streaming` status is only ever transitioned by the in-memory
+   * generation that owns it (see `activeGenerations` in socket.ts). After a
+   * restart nothing owns it, so the row would render as a permanent "queued"
+   * shimmer — exactly the stuck-response symptom. Flipping them to `failed`
+   * here turns that into a visible message the user can act on.
+   *
+   * Model keys contain dots (`gemini-2.5-flash`), so this queries with
+   * `$objectToArray` rather than a dotted path, and writes back by replacing
+   * the whole `modelResponses` field rather than a positional `$set`.
+   */
+  async reapInterruptedStreams(): Promise<number> {
+    const INTERRUPTED = 'Interrupted by a server restart — this response never completed. Please re-send the prompt.';
+
+    const stuck = await MessageModel.aggregate([
+      { $addFields: { _responses: { $objectToArray: '$modelResponses' } } },
+      { $match: { '_responses.v.status': { $in: ['pending', 'streaming'] } } },
+      { $project: { _id: 1 } },
+    ]);
+    if (stuck.length === 0) return 0;
+
+    let reaped = 0;
+    for (const doc of stuck) {
+      const existing = await MessageModel.findById(doc._id).lean();
+      if (!existing) continue;
+      const responses = existing.modelResponses || {};
+      let changed = false;
+      for (const key of Object.keys(responses)) {
+        const r = responses[key] as { status?: string; error?: string };
+        if (r && (r.status === 'pending' || r.status === 'streaming')) {
+          r.status = 'failed';
+          r.error = INTERRUPTED;
+          reaped++;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await MessageModel.updateOne({ _id: doc._id }, { $set: { modelResponses: responses } });
+      }
+    }
+    return reaped;
+  }
+
   // --- CLAIM METHODS ---
   // Claims are the room's persistent memory. See `server/context.ts` for the
   // extraction heuristic and the context preamble that consumes them.
@@ -718,11 +903,23 @@ class MongoDatabaseAdapter {
     return docs.map((d: any) => ({ ...d, id: d._id })) as unknown as Claim[];
   }
 
-  /** Deletes one claim, scoped to its room so a stale client id can't touch another room. */
+  /** One claim, scoped to its room — the gate every evidence request passes. */
+  async getClaimById(conversationId: string, claimId: string): Promise<Claim | undefined> {
+    const d = await ClaimModel.findOne({ _id: claimId, conversationId }).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Claim;
+  }
+
+  /**
+   * Deletes one claim, scoped to its room so a stale client id can't touch
+   * another room. Everything anchored to the claim goes with it: the edges it
+   * participates in, their discussions, and the evidence attached to it.
+   */
   async deleteClaim(conversationId: string, claimId: string): Promise<boolean> {
     const res = await ClaimModel.deleteOne({ _id: claimId, conversationId });
     if (res.deletedCount > 0) {
       await this.deleteClaimRelationsForClaim(claimId);
+      await this.deleteEvidenceForClaims([claimId]);
     }
     return res.deletedCount > 0;
   }
@@ -732,9 +929,11 @@ class MongoDatabaseAdapter {
     const res = await ClaimModel.deleteMany({ conversationId });
     await ClaimRelationModel.deleteMany({ conversationId });
     // Clearing the room's memory also clears every contradiction discussion it
-    // held — comments and poll votes have no meaning without their edge.
+    // held — comments and poll votes have no meaning without their edge — and
+    // the evidence that backed the claims.
     await DiscussionCommentModel.deleteMany({ conversationId });
     await ContradictionVoteModel.deleteMany({ conversationId });
+    await EvidenceModel.deleteMany({ conversationId });
     return res.deletedCount || 0;
   }
 
@@ -915,12 +1114,35 @@ class MongoDatabaseAdapter {
    * Closes a contradiction as `resolved` or `dismissed`, recording who closed it
    * and why. This is the ONLY place the closed statuses are written — the poll
    * tally and the detector's confidence are never inputs to it.
+   *
+   * `citedEvidenceIds` are the pieces of evidence the closer pointed at while
+   * deciding; they are recorded with the closure so the decision is auditable.
    */
   async resolveRelation(
     conversationId: string,
     relationId: string,
-    closure: { status: 'resolved' | 'evidence-needed' | 'dismissed'; resolution: string; resolvedBy: string; resolvedByName: string }
+    closure: { status: 'resolved' | 'evidence-needed' | 'dismissed'; resolution: string; resolvedBy: string; resolvedByName: string; citedEvidenceIds?: string[] }
   ): Promise<ClaimRelation | undefined> {
+    // A citation is only meaningful if it points at evidence actually attached
+    // to one of the two claims in this contradiction. The route filters too, but
+    // the storage layer guarantees the invariant for every caller, so a record
+    // can never cite evidence that does not belong to its own pair.
+    const requested = dedupeIds(closure.citedEvidenceIds);
+    let citedEvidenceIds: string[] = [];
+    if (requested.length > 0) {
+      const existing = await ClaimRelationModel.findOne(
+        { _id: relationId, conversationId },
+        { claimAId: 1, claimBId: 1 }
+      ).lean();
+      if (!existing) return undefined;
+      const available = await EvidenceModel.find({
+        conversationId,
+        claimId: { $in: [existing.claimAId, existing.claimBId] }
+      }).select('_id').lean();
+      const valid = new Set(available.map((e: any) => e._id as string));
+      citedEvidenceIds = requested.filter((id) => valid.has(id));
+    }
+
     const d = await ClaimRelationModel.findOneAndUpdate(
       { _id: relationId, conversationId },
       {
@@ -928,7 +1150,8 @@ class MongoDatabaseAdapter {
         resolution: closure.resolution,
         resolvedBy: closure.resolvedBy,
         resolvedByName: closure.resolvedByName,
-        resolvedAt: new Date().toISOString()
+        resolvedAt: new Date().toISOString(),
+        citedEvidenceIds
       },
       { new: true }
     ).lean();
@@ -936,10 +1159,382 @@ class MongoDatabaseAdapter {
     return { ...d, id: d._id } as unknown as ClaimRelation;
   }
 
+  // --- EVIDENCE METHODS ---
+  //
+  // Evidence is scoped to a claim, and through the claim to a room. Every write
+  // carries the conversationId so a stale client id can never touch another
+  // room's evidence — the same scoping discipline the claim methods use.
+
+  /** Stores one piece of evidence attached to a claim. */
+  async createEvidence(evidence: Evidence): Promise<Evidence> {
+    const created = await EvidenceModel.create({
+      _id: evidence.id || generateUUID(),
+      claimId: evidence.claimId,
+      conversationId: evidence.conversationId,
+      kind: evidence.kind,
+      title: evidence.title,
+      url: evidence.url ?? null,
+      fileName: evidence.fileName ?? null,
+      mimeType: evidence.mimeType ?? null,
+      sizeBytes: evidence.sizeBytes ?? null,
+      data: evidence.data ?? null,
+      excerpt: evidence.excerpt ?? null,
+      source: evidence.source ?? null,
+      aiGenerated: evidence.aiGenerated,
+      modelName: evidence.modelName ?? null,
+      authorId: evidence.authorId ?? null,
+      authorName: evidence.authorName ?? null,
+      createdAt: evidence.createdAt || new Date().toISOString()
+    });
+    return { ...created.toObject(), id: created._id } as unknown as Evidence;
+  }
+
+  /** Newest-first evidence for one claim. */
+  async getEvidenceForClaim(conversationId: string, claimId: string, limit = 50): Promise<Evidence[]> {
+    const docs = await EvidenceModel.find({ conversationId, claimId })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(Math.min(Math.max(limit, 1), 100))
+      .lean();
+    return docs.map((d: any) => ({ ...d, id: d._id })) as unknown as Evidence[];
+  }
+
+  /**
+   * Evidence for every claim in `claimIds`, returned as a claimId -> evidence
+   * map. One round trip instead of N: a contradiction's detail view needs both
+   * sides' evidence at once.
+   */
+  async getEvidenceForClaims(conversationId: string, claimIds: string[]): Promise<Record<string, Evidence[]>> {
+    const map: Record<string, Evidence[]> = {};
+    if (!claimIds || claimIds.length === 0) return map;
+    const docs = await EvidenceModel.find({ conversationId, claimId: { $in: claimIds } })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(200)
+      .lean();
+    for (const d of docs) {
+      const rec = { ...d, id: d._id } as unknown as Evidence;
+      (map[rec.claimId] ||= []).push(rec);
+    }
+    return map;
+  }
+
+  /** One evidence document, scoped to its room. */
+  async getEvidenceById(conversationId: string, evidenceId: string): Promise<Evidence | undefined> {
+    const d = await EvidenceModel.findOne({ _id: evidenceId, conversationId }).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Evidence;
+  }
+
+  /**
+   * Deletes one piece of evidence. Authors may delete their own; the workspace
+   * owner and admins may delete anyone's (moderation). AI-generated references
+   * have no author, so only a moderator can remove them.
+   */
+  async deleteEvidence(conversationId: string, evidenceId: string, userId: string, moderator: boolean): Promise<boolean> {
+    const filter: Record<string, unknown> = { _id: evidenceId, conversationId };
+    if (!moderator) filter.authorId = userId;
+    const res = await EvidenceModel.deleteOne(filter);
+    if (res.deletedCount > 0) {
+      // Stop dangling citations: pull this id from any contradiction that
+      // referenced it when it was closed.
+      await ClaimRelationModel.updateMany(
+        { citedEvidenceIds: evidenceId },
+        { $pull: { citedEvidenceIds: evidenceId } }
+      );
+    }
+    return res.deletedCount > 0;
+  }
+
+  /** Deletes every piece of evidence attached to the given claims. */
+  private async deleteEvidenceForClaims(claimIds: string[]): Promise<void> {
+    if (!claimIds || claimIds.length === 0) return;
+    const ev = await EvidenceModel.find({ claimId: { $in: claimIds } }).select('_id').lean();
+    if (ev.length === 0) return;
+    const ids = ev.map((e: any) => e._id as string);
+    await EvidenceModel.deleteMany({ _id: { $in: ids } });
+    await ClaimRelationModel.updateMany(
+      { citedEvidenceIds: { $in: ids } },
+      { $pullAll: { citedEvidenceIds: ids } }
+    );
+  }
+
+  /** Deletes every piece of evidence in a room. */
+  async deleteEvidenceByConversation(conversationId: string): Promise<number> {
+    const res = await EvidenceModel.deleteMany({ conversationId });
+    if (res.deletedCount > 0) {
+      // The room's relations may have cited any of it; clear the stale ids.
+      await ClaimRelationModel.updateMany(
+        { conversationId, citedEvidenceIds: { $exists: true, $ne: [] } },
+        { $set: { citedEvidenceIds: [] } }
+      );
+    }
+    return res.deletedCount || 0;
+  }
+
+  // --- DECISION METHODS ---
+  //
+  // A decision is the room's formal commitment. Reads and writes are scoped to
+  // the room exactly like claims and evidence, so a stale client id from one
+  // room can never touch another room's decision. History is append-only by
+  // construction: every mutating method `$push`es onto `history` and no method
+  // ever writes to an existing entry.
+
+  /** Newest-first decisions for a room, bounded by `limit`. */
+  async getDecisions(conversationId: string, limit = 30): Promise<Decision[]> {
+    const docs = await DecisionModel.find({ conversationId })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(Math.min(Math.max(limit, 1), 100))
+      .lean();
+    return docs.map((d: any) => ({ ...d, id: d._id })) as unknown as Decision[];
+  }
+
+  /** One decision, scoped to its room. */
+  async getDecisionById(conversationId: string, decisionId: string): Promise<Decision | undefined> {
+    const d = await DecisionModel.findOne({ _id: decisionId, conversationId }).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /** Creates a decision. The caller has already validated and de-duplicated. */
+  async createDecision(decision: Decision): Promise<Decision> {
+    const created = await DecisionModel.create({
+      _id: decision.id || generateUUID(),
+      conversationId: decision.conversationId,
+      title: decision.title,
+      statement: decision.statement,
+      claimIds: decision.claimIds || [],
+      requiredApproverIds: decision.requiredApproverIds || [],
+      approvals: decision.approvals || [],
+      status: 'draft',
+      createdBy: decision.createdBy,
+      createdByName: decision.createdByName,
+      finalizedAt: null,
+      finalizedBy: null,
+      finalizedByName: null,
+      history: decision.history || [],
+      createdAt: decision.createdAt || new Date().toISOString()
+    });
+    return { ...created.toJSON(), id: created._id } as unknown as Decision;
+  }
+
+  /**
+   * Appends one history entry to a decision. This and `setDecisionStatus` are
+   * the only writers of `history`, and both only ever push — the trail is
+   * append-only for the lifetime of the document.
+   */
+  async appendDecisionHistory(
+    conversationId: string,
+    decisionId: string,
+    entry: DecisionHistoryEntry
+  ): Promise<Decision | undefined> {
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId },
+      { $push: { history: entry } },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /**
+   * Edits a draft decision's statement and title. Finalized decisions are
+   * locked, so this filters on `status: 'draft'` and returns undefined for a
+   * finalized one — the caller turns that into an explicit 409.
+   */
+  async editDecision(
+    conversationId: string,
+    decisionId: string,
+    patch: { title?: string; statement?: string }
+  ): Promise<Decision | undefined> {
+    const update: Record<string, unknown> = {};
+    if (typeof patch.title === 'string' && patch.title.trim()) update.title = patch.title.trim();
+    if (typeof patch.statement === 'string' && patch.statement.trim()) update.statement = patch.statement.trim();
+    if (Object.keys(update).length === 0) {
+      return this.getDecisionById(conversationId, decisionId);
+    }
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      { $set: update },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /**
+   * Links or unlinks claims from a draft decision. Only drafts: the claim basis
+   * of a finalized decision is part of the record and must not shift.
+   */
+  async setDecisionClaims(
+    conversationId: string,
+    decisionId: string,
+    claimIds: string[]
+  ): Promise<Decision | undefined> {
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      { $set: { claimIds: dedupeIds(claimIds) } },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /** Sets the required-approver list on a draft decision. */
+  async setDecisionApprovers(
+    conversationId: string,
+    decisionId: string,
+    approverIds: string[]
+  ): Promise<Decision | undefined> {
+    const next = dedupeIds(approverIds);
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      {
+        $set: { requiredApproverIds: next },
+        // Drop any approvals from members who are no longer required.
+        $pull: { approvals: { userId: { $nin: next } } }
+      },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /**
+   * Records one member's approval, idempotently. Up-serting on the (decisionId,
+   * userId) pair means approving twice is a no-op rather than a duplicate row,
+   * and un-approving then re-approving moves the timestamp forward.
+   */
+  async approveDecision(
+    conversationId: string,
+    decisionId: string,
+    userId: string,
+    userName: string
+  ): Promise<Decision | undefined> {
+    const now = new Date().toISOString();
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      {
+        $pull: { approvals: { userId } },
+      },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+
+    const updated = await DecisionModel.findByIdAndUpdate(
+      decisionId,
+      {
+        $push: { approvals: { userId, userName, approvedAt: now } }
+      },
+      { new: true }
+    ).lean();
+    if (!updated) return undefined;
+    return { ...updated, id: updated._id } as unknown as Decision;
+  }
+
+  /** Withdraws one member's approval. */
+  async withdrawApproval(
+    conversationId: string,
+    decisionId: string,
+    userId: string
+  ): Promise<Decision | undefined> {
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      { $pull: { approvals: { userId } } },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /**
+   * Flips a draft to finalized. Filters on `status: 'draft'` so a double submit
+   * or a race with a reopen is a harmless no-op rather than a second
+   * finalization that overwrites the record.
+   */
+  async finalizeDecision(
+    conversationId: string,
+    decisionId: string,
+    actor: { id: string; name: string }
+  ): Promise<Decision | undefined> {
+    const now = new Date().toISOString();
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'draft' },
+      {
+        $set: {
+          status: 'finalized',
+          finalizedAt: now,
+          finalizedBy: actor.id,
+          finalizedByName: actor.name
+        },
+        $push: {
+          history: {
+            action: 'finalized',
+            actorId: actor.id,
+            actorName: actor.name,
+            detail: 'Finalized — every gate condition was satisfied.',
+            at: now
+          }
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /**
+   * Returns a finalized decision to draft. The original finalization entry
+   * stays in `history`, so the record always shows the decision was locked and
+   * by whom — reopening is visible, never silent.
+   */
+  async reopenDecision(
+    conversationId: string,
+    decisionId: string,
+    actor: { id: string; name: string },
+    reason: string
+  ): Promise<Decision | undefined> {
+    const now = new Date().toISOString();
+    const d = await DecisionModel.findOneAndUpdate(
+      { _id: decisionId, conversationId, status: 'finalized' },
+      {
+        $set: {
+          status: 'draft',
+          finalizedAt: null,
+          finalizedBy: null,
+          finalizedByName: null
+        },
+        $push: {
+          history: {
+            action: 'reopened',
+            actorId: actor.id,
+            actorName: actor.name,
+            detail: `Reopened: ${reason}`,
+            at: now
+          }
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!d) return undefined;
+    return { ...d, id: d._id } as unknown as Decision;
+  }
+
+  /** Deletes one decision, scoped to its room. */
+  async deleteDecision(conversationId: string, decisionId: string): Promise<boolean> {
+    const res = await DecisionModel.deleteOne({ _id: decisionId, conversationId });
+    return res.deletedCount > 0;
+  }
+
+  /** Deletes every decision in a room (used by room clearing). */
+  async deleteDecisionsByConversation(conversationId: string): Promise<number> {
+    const res = await DecisionModel.deleteMany({ conversationId });
+    return res.deletedCount || 0;
+  }
+
   /**
    * Tears down the room memory attached to a set of claims: every contradiction
-   * edge they participate in, and the human discussion on each of those edges.
-   * Shared by single-message deletion and whole-room clearing.
+   * edge they participate in, the human discussion on each of those edges, and
+   * the evidence attached to the claims themselves. Shared by single-message
+   * deletion and whole-room clearing.
    */
   private async cascadeClaims(claimIds: string[]): Promise<void> {
     if (!claimIds || claimIds.length === 0) return;
@@ -948,6 +1543,7 @@ class MongoDatabaseAdapter {
     }).select('_id').lean();
     const relationIds = rels.map((r: any) => r._id as string);
     await this.deleteDiscussionForRelations(relationIds);
+    await this.deleteEvidenceForClaims(claimIds);
     await ClaimRelationModel.deleteMany({ _id: { $in: relationIds } });
     await ClaimModel.deleteMany({ _id: { $in: claimIds } });
   }
@@ -1007,6 +1603,10 @@ class MongoDatabaseAdapter {
     // Belt-and-braces: any discussion data not reached through an edge.
     await DiscussionCommentModel.deleteMany({ conversationId });
     await ContradictionVoteModel.deleteMany({ conversationId });
+    // ...and any evidence orphaned from its claim.
+    await EvidenceModel.deleteMany({ conversationId });
+    // A room whose claims are gone has no basis for a decision either.
+    await DecisionModel.deleteMany({ conversationId });
 
     const res = await MessageModel.deleteMany({ conversationId });
     return res.deletedCount || 0;
@@ -1062,6 +1662,121 @@ class MongoDatabaseAdapter {
       return log;
     } catch (err) {
       console.error('Failed to save audit log:', err);
+    }
+  }
+
+  // ── TIMELINE (decision replay) ──────────────────────────────────────────
+  //
+  // The event stream the replay view scrubs through. Recording is best-effort
+  // by design: a timeline write must never be the reason a room action fails,
+  // so every method here swallows its own errors and logs them instead.
+
+  /**
+   * Records one room-level event. Returns the event, or null if the write
+   * failed — callers treat null as "the timeline missed this one" and carry
+   * on, since the action itself already succeeded.
+   */
+  async recordTimelineEvent(input: {
+    conversationId: string;
+    decisionId?: string | null;
+    kind: TimelineEventKind;
+    at?: string;
+    actorId?: string | null;
+    actorName: string;
+    title: string;
+    detail: string;
+    messageId?: string | null;
+    claimIds?: string[];
+    relationId?: string | null;
+    evidenceId?: string | null;
+    memberIds?: string[];
+    meta?: Record<string, unknown>;
+  }): Promise<TimelineEvent | null> {
+    try {
+      const doc = await TimelineEventModel.create({
+        _id: generateUUID(),
+        conversationId: input.conversationId,
+        decisionId: input.decisionId ?? null,
+        kind: input.kind,
+        at: input.at ?? new Date().toISOString(),
+        actorId: input.actorId ?? null,
+        actorName: input.actorName,
+        title: input.title,
+        detail: input.detail,
+        messageId: input.messageId ?? null,
+        claimIds: dedupeIds(input.claimIds),
+        relationId: input.relationId ?? null,
+        evidenceId: input.evidenceId ?? null,
+        memberIds: dedupeIds(input.memberIds),
+        meta: input.meta ?? {},
+        createdAt: new Date().toISOString()
+      });
+      return { ...doc.toJSON(), id: doc._id } as unknown as TimelineEvent;
+    } catch (err) {
+      console.error('Failed to record a timeline event:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Reads a room's whole event stream, oldest first. Ordered by `at` then by
+   * `_id` so the same data always yields the same positions — the scrubber's
+   * cursor must be stable if the room re-opens the replay mid-session.
+   */
+  async getTimelineEvents(conversationId: string, limit = 1000): Promise<TimelineEvent[]> {
+    const docs = await TimelineEventModel
+      .find({ conversationId })
+      .sort({ at: 1, _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map((d) => ({ ...d, id: d._id })) as unknown as TimelineEvent[];
+  }
+
+  /**
+   * Appends a decision history entry AND records the matching timeline event
+   * in one call, so the two records cannot drift apart. `refs` carries the ids
+   * `history.detail` deliberately does not store — the replay needs a claim or
+   * member id to reconstruct state, and the human-readable detail is the wrong
+   * place for one.
+   *
+   * The history write happens first and is awaited: it is the authoritative
+   * trail existing behaviour already depends on. The timeline write follows
+   * and can only fail loudly into the log, never into the caller's path.
+   */
+  async recordDecisionEvent(
+    conversationId: string,
+    decisionId: string,
+    entry: DecisionHistoryEntry,
+    refs?: { claimIds?: string[]; memberIds?: string[]; meta?: Record<string, unknown> }
+  ): Promise<void> {
+    await this.appendDecisionHistory(conversationId, decisionId, entry);
+    try {
+      await this.recordTimelineEvent({
+        conversationId,
+        decisionId,
+        kind: historyActionToTimelineKind(entry.action),
+        at: entry.at,
+        actorId: entry.actorId,
+        actorName: entry.actorName,
+        title: historyActionLabel(entry.action),
+        detail: entry.detail,
+        claimIds: refs?.claimIds,
+        memberIds: refs?.memberIds,
+        meta: refs?.meta
+      });
+    } catch (err) {
+      console.error('Failed to record the decision timeline event:', err);
+    }
+  }
+
+  /** Deletes every timeline event for a decision, used when a decision is
+   *  deleted outright. Room-level events are left alone — the room's history
+   *  is not the decision's to erase. */
+  async deleteDecisionTimelineEvents(decisionId: string): Promise<void> {
+    try {
+      await TimelineEventModel.deleteMany({ decisionId });
+    } catch (err) {
+      console.error('Failed to delete decision timeline events:', err);
     }
   }
 

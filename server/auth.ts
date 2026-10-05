@@ -79,13 +79,16 @@ export function getRefreshCookieOptions(req?: Request) {
   };
 }
 
-/** Legacy constant kept for the clearCookie paths that don't have a request. */
-export const REFRESH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: (process.env.NODE_ENV === 'production' ? 'none' : 'lax') as 'none' | 'lax',
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-};
+/**
+ * Removes the refresh cookie. Unlike `res.cookie`, `res.clearCookie` applies
+ * an immediate expiry on its own, so it must not receive `maxAge` — Express 5
+ * ignores the option and logs a deprecation warning, and a stale `maxAge`
+ * could even outrace the immediate expiry on some clients.
+ */
+export function clearRefreshCookie(res: Response, req?: Request) {
+  const { maxAge: _omit, ...options } = getRefreshCookieOptions(req);
+  res.clearCookie('refreshToken', options);
+}
 
 // Middleware to authenticate user
 export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -342,7 +345,7 @@ export async function handleRefresh(req: Request, res: Response) {
         userDoc.refreshToken = null;
         await userDoc.save();
       }
-      res.clearCookie('refreshToken', getRefreshCookieOptions(req));
+      clearRefreshCookie(res, req);
       return res.status(401).json({ error: 'Session revoked due to token conflict. Please authenticate again.' });
     }
 
@@ -385,7 +388,7 @@ export async function handleLogout(req: Request, res: Response) {
     console.warn('Logout database record traces exception:', err);
   }
 
-  res.clearCookie('refreshToken', getRefreshCookieOptions(req));
+  clearRefreshCookie(res, req);
   return res.status(200).json({ message: 'Logged out successfully' });
 }
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
-import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, ContradictionDiscussion } from './types';
+import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, ContradictionDiscussion, Evidence, EvidenceKind, Decision, DecisionGateResult, DecisionReplay, DecisionSummary, WorkspaceMember } from './types';
 
 /** Compact search hit returned by the room history search endpoint. */
 export interface SearchResult {
@@ -11,6 +11,24 @@ export interface SearchResult {
   matchedIn: string;
   snippet: string;
 }
+
+/**
+ * Evidence a member attaches to a claim, as sent from the UI. The `file` kind
+ * carries the bytes as a base64 data URI — the same inline convention the
+ * message schema uses — because there is no separate upload service.
+ */
+export type EvidenceInput =
+  | { kind: 'url'; title: string; url: string }
+  | { kind: 'quote'; title: string; excerpt: string; source?: string }
+  | { kind: 'user'; title: string; excerpt: string }
+  | {
+      kind: 'file';
+      title: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      data: string;
+    };
 
 // Import our modular stores to compose the hub
 import { useAuthStore } from './stores/authStore';
@@ -42,6 +60,20 @@ export interface AppState {
   relations: ClaimRelation[];
   /** Human discussions for the room's contradictions, keyed by relation id. */
   discussions: Record<string, ContradictionDiscussion>;
+  /** Evidence attached to the room's claims, keyed by claim id. */
+  evidence: Record<string, Evidence[]>;
+  /** The room's decisions, newest-first. */
+  decisions: Decision[];
+  /** The gate verdict for the decision the room is currently inspecting. */
+  decisionGate: DecisionGateResult | null;
+  /** The replay timeline for the decision currently being replayed. */
+  decisionReplay: DecisionReplay | null;
+  /** The summary for the decision currently being summarized. */
+  decisionSummary: DecisionSummary | null;
+  /** True while a replay or summary is loading, for the overlays' spinners. */
+  decisionReplayBusy: boolean;
+  /** The active workspace's members, for the approver picker. */
+  workspaceMembers: WorkspaceMember[];
   setHighlightMessageId: (id: string | null) => void;
   savedResponses: SavedResponse[];
   // Real-time Presence
@@ -118,11 +150,71 @@ export interface AppState {
    * null on success, or the reason it was refused (authorisation, validation,
    * server error) so the UI can show the member exactly what happened.
    */
-  resolveContradiction: (relationId: string, status: 'resolved' | 'evidence-needed' | 'dismissed', resolution: string) => Promise<string | null>;
+  resolveContradiction: (relationId: string, status: 'resolved' | 'evidence-needed' | 'dismissed', resolution: string, citedEvidenceIds?: string[]) => Promise<string | null>;
   /** Deletes one claim from the current room. */
   deleteClaim: (claimId: string) => Promise<void>;
   /** Deletes every claim in the current room. */
   clearClaims: () => Promise<void>;
+
+  // Evidence Actions
+  /** Loads the evidence attached to one claim. */
+  fetchEvidence: (claimId: string) => Promise<void>;
+  /** Loads the evidence for both claims of a contradiction in one round trip. */
+  fetchEvidenceForRelation: (relationId: string) => Promise<void>;
+  /**
+   * Attaches one piece of evidence to a claim. `input` is a plain object for
+   * url/quote/user kinds; for `file` it carries the file's metadata plus its
+   * base64 data URI. Resolves to null on success or the server's refusal.
+   */
+  attachEvidence: (claimId: string, input: EvidenceInput) => Promise<string | null>;
+  /** Asks a model for an unverified reference grounded in the claim's source. */
+  generateAiEvidence: (claimId: string) => Promise<string | null>;
+  /** Deletes one piece of evidence (own, or any as a moderator). */
+  deleteEvidence: (claimId: string, evidenceId: string) => Promise<void>;
+
+  // Decision Actions
+  /**
+   * Loads a room's decisions. Finalized ones carry their own status; the gate
+   * for the open detail view is fetched separately.
+   */
+  fetchDecisions: (conversationId: string) => Promise<void>;
+  /** Loads a decision plus its current gate verdict — what is blocking, if anything. */
+  fetchDecisionGate: (decisionId: string) => Promise<void>;
+  /** Loads a decision's replay timeline: its events and the state at each one. */
+  fetchDecisionReplay: (decisionId: string) => Promise<void>;
+  /** Loads a decision's final summary, optionally narrated by the AI. */
+  fetchDecisionSummary: (decisionId: string, narrate?: boolean) => Promise<void>;
+  /** Clears the replay and summary views, e.g. when the room changes. */
+  clearDecisionReplay: () => void;
+  /**
+   * Creates a decision. Resolves to the new decision's id, or null if the
+   * server refused.
+   */
+  createDecision: (input: { title: string; statement: string; claimIds?: string[]; requiredApproverIds?: string[] }) => Promise<string | null>;
+  /** Edits a draft decision's title or statement. Returns null on success or the refusal reason. */
+  editDecision: (decisionId: string, patch: { title?: string; statement?: string }) => Promise<string | null>;
+  /** Sets the claims a draft decision rests on. Returns null on success or the refusal reason. */
+  setDecisionClaims: (decisionId: string, claimIds: string[]) => Promise<string | null>;
+  /** Sets which members must approve a draft decision. Returns null on success or the refusal reason. */
+  setDecisionApprovers: (decisionId: string, approverIds: string[]) => Promise<string | null>;
+  /** Records the current user's approval. Returns null on success or the refusal reason. */
+  approveDecision: (decisionId: string) => Promise<string | null>;
+  /** Withdraws the current user's approval. Returns null on success or the refusal reason. */
+  withdrawDecisionApproval: (decisionId: string) => Promise<string | null>;
+  /**
+   * Attempts to finalize. Resolves to null on success, or the server's refusal
+   * — which for an unsatisfied gate is the human-readable blocker list the UI
+   * shows verbatim.
+   */
+  finalizeDecision: (decisionId: string) => Promise<string | null>;
+  /** Reopens a finalized decision with a recorded reason. Returns null on success or the refusal reason. */
+  reopenDecision: (decisionId: string, reason: string) => Promise<string | null>;
+  /** Deletes a decision. Returns null on success or the refusal reason. */
+  deleteDecision: (decisionId: string) => Promise<string | null>;
+  /** Clears local decision state when leaving a room. */
+  resetDecisions: () => void;
+  /** Loads the workspace's member roster for the decision approver picker. */
+  fetchWorkspaceMembers: (workspaceId: string) => Promise<void>;
   /** Removes one prompt and its response(s) from the current room. */
   deleteMessage: (messageId: string) => Promise<void>;
   /** Clears every prompt and response in the current room, keeping the room. */
@@ -253,7 +345,16 @@ export const useStore = create<AppState>((set, get) => {
     // transient backend blip (e.g. a DNS hiccup reaching Atlas) made the
     // handshake's user lookup fail. Rotate the token and reconnect.
     let authRetries = 0;
+    let transientFailures = 0;
     const MAX_AUTH_RETRIES = 5;
+    // Transient backend trouble (5xx, or the fetch itself failing) gets a far
+    // longer leash than a dead session: the refresh cookie is still good, the
+    // outage is on our side, and giving up would strand the room until someone
+    // reloads the page. Capped so a permanently-down backend still backs off.
+    const MAX_TRANSIENT_RETRIES = 20;
+    const scheduleReconnect = () =>
+      setTimeout(() => socket.connect(), Math.min(1000 * authRetries, 5000));
+
     socket.on('connect_error', async (err: any) => {
       console.warn('Socket handshake refused, rotating session token:', err?.message);
       if (authRetries >= MAX_AUTH_RETRIES) {
@@ -267,20 +368,43 @@ export const useStore = create<AppState>((set, get) => {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
         });
-        if (!refreshRes.ok) {
-          // No usable refresh cookie: nothing to reconnect with. The header
-          // already shows "Off", and the next API call routes to login.
-          console.warn('Socket reconnect aborted: session cannot be refreshed.');
+        // A dead session (revoked/expired/refresh-token-missing) is not going to
+        // heal itself — stop here and let the next API call route to login.
+        // 403 is a suspended account, which is equally permanent.
+        if (refreshRes.status === 401 || refreshRes.status === 403) {
+          console.warn(`Socket reconnect aborted: session is invalid (HTTP ${refreshRes.status}).`);
           return;
         }
+        if (!refreshRes.ok) {
+          // 5xx and friends: the session is probably fine, the backend is not.
+          // Keep the socket alive on the existing token so it retries once the
+          // outage clears, without burning the permanent-session budget.
+          transientFailures++;
+          if (transientFailures >= MAX_TRANSIENT_RETRIES) {
+            console.warn('Socket reconnect abandoned: backend unreachable for too long.');
+            return;
+          }
+          console.warn(`Socket reconnect deferred: backend temporarily unavailable (HTTP ${refreshRes.status}, attempt ${transientFailures}).`);
+          scheduleReconnect();
+          return;
+        }
+        transientFailures = 0;
         const data = await refreshRes.json();
         useAuthStore.setState({ user: data.user, token: data.token, authError: null });
         // Re-arm the handshake with the rotated token, then retry with a
         // modest backoff so a sustained backend outage can't hammer the server.
         socket.auth = { token: data.token };
-        setTimeout(() => socket.connect(), Math.min(1000 * authRetries, 5000));
+        scheduleReconnect();
       } catch (refreshErr) {
-        console.error('Socket reconnect token rotation failed:', refreshErr);
+        // A rejected fetch is a network-level failure, not a session problem —
+        // treat it like a 5xx and keep the socket trying.
+        transientFailures++;
+        if (transientFailures >= MAX_TRANSIENT_RETRIES) {
+          console.warn('Socket reconnect abandoned: network unreachable for too long.');
+          return;
+        }
+        console.warn('Socket reconnect deferred: network error reaching backend.', refreshErr);
+        scheduleReconnect();
       }
     });
 
@@ -483,18 +607,23 @@ export const useStore = create<AppState>((set, get) => {
     socket.on('claim-deleted', (data: { conversationId: string; claimId: string }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (!data?.claimId || data.conversationId !== activeConv?.id) return;
-      useChatStore.setState((state) => ({
-        claims: state.claims.filter((c) => c.id !== data.claimId),
-        // The cascade removes every edge that touched the deleted claim.
-        relations: state.relations.filter((r) => r.claimAId !== data.claimId && r.claimBId !== data.claimId)
-      }));
+      useChatStore.setState((state) => {
+        const { [data.claimId]: _removed, ...restEvidence } = state.evidence;
+        return {
+          claims: state.claims.filter((c) => c.id !== data.claimId),
+          // The cascade removes every edge that touched the deleted claim...
+          relations: state.relations.filter((r) => r.claimAId !== data.claimId && r.claimBId !== data.claimId),
+          // ...and the evidence attached to it.
+          evidence: restEvidence
+        };
+      });
     });
 
     // Another member cleared the room's claims.
     socket.on('claims-cleared', (data: { conversationId: string }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (data.conversationId !== activeConv?.id) return;
-      useChatStore.setState({ claims: [], relations: [] });
+      useChatStore.setState({ claims: [], relations: [], evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
     });
 
     // Another member removed a prompt and its responses. The claims that
@@ -503,18 +632,23 @@ export const useStore = create<AppState>((set, get) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (!data?.messageId || data.conversationId !== activeConv?.id) return;
       const removed = new Set(data.claimIds ?? []);
-      useChatStore.setState((state) => ({
-        messages: state.messages.filter((m) => m.id !== data.messageId),
-        claims: state.claims.filter((c) => c.messageId !== data.messageId),
-        relations: state.relations.filter((r) => !removed.has(r.claimAId) && !removed.has(r.claimBId)),
-      }));
+      useChatStore.setState((state) => {
+        const restEvidence = { ...state.evidence };
+        for (const id of removed) delete restEvidence[id];
+        return {
+          messages: state.messages.filter((m) => m.id !== data.messageId),
+          claims: state.claims.filter((c) => c.messageId !== data.messageId),
+          relations: state.relations.filter((r) => !removed.has(r.claimAId) && !removed.has(r.claimBId)),
+          evidence: restEvidence,
+        };
+      });
     });
 
     // Another member cleared the whole room's chat; the room's memory goes too.
     socket.on('messages-cleared', (data: { conversationId: string }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (data.conversationId !== activeConv?.id) return;
-      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {} });
+      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
     });
 
     // The contradiction detector found a conflict (or other relationship) between
@@ -597,6 +731,61 @@ export const useStore = create<AppState>((set, get) => {
       }));
     });
 
+    // Another member (or a model, via the member who asked it) attached evidence
+    // to a claim. Merge it if we have that claim's evidence loaded; if not, the
+    // detail view will fetch the whole list when it opens.
+    socket.on('evidence-added', (data: { conversationId: string; claimId: string; evidence: Evidence }) => {
+      const activeConv = useChatStore.getState().activeConversation;
+      if (!data?.evidence || data.conversationId !== activeConv?.id) return;
+      const claimId = data.claimId || data.evidence.claimId;
+      // Only merge into a list we've already loaded; an unloaded claim fetches
+      // its full list when its detail view opens.
+      if (!useChatStore.getState().evidence[claimId]) return;
+      useChatStore.getState().upsertEvidence(data.evidence);
+    });
+
+    // A piece of evidence was removed. Drop it locally, along with any
+    // citations closed contradictions made of it.
+    socket.on('evidence-deleted', (data: { conversationId: string; claimId: string; evidenceId: string }) => {
+      const activeConv = useChatStore.getState().activeConversation;
+      if (!data?.evidenceId || data.conversationId !== activeConv?.id) return;
+      useChatStore.getState().removeEvidence(data.claimId, data.evidenceId);
+    });
+
+    // ── Decisions (the evidence gate) ───────────────────────────────────
+    // Another member created, edited, approved, reopened, or deleted a decision
+    // in this room. Replace the single decision in place when the payload
+    // carries it; drop it on delete. The gate verdict is refreshed by the detail
+    // view's own fetch, so these handlers only keep the list honest.
+    const onDecisionChanged = (data: { conversationId: string; decision: Decision }) => {
+      const activeConv = useChatStore.getState().activeConversation;
+      if (!data?.decision || data.conversationId !== activeConv?.id) return;
+      const incoming = data.decision;
+      useChatStore.setState((state) => {
+        const exists = state.decisions.some((d) => d.id === incoming.id);
+        return {
+          decisions: exists
+            ? state.decisions.map((d) => (d.id === incoming.id ? incoming : d))
+            : [incoming, ...state.decisions]
+        };
+      });
+    };
+    socket.on('decision-created', onDecisionChanged);
+    socket.on('decision-updated', onDecisionChanged);
+    socket.on('decision-finalized', onDecisionChanged);
+    socket.on('decision-reopened', onDecisionChanged);
+
+    socket.on('decision-deleted', (data: { conversationId: string; decisionId: string }) => {
+      const activeConv = useChatStore.getState().activeConversation;
+      if (!data?.decisionId || data.conversationId !== activeConv?.id) return;
+      useChatStore.setState((state) => ({
+        decisions: state.decisions.filter((d) => d.id !== data.decisionId),
+        decisionGate: state.decisionGate?.decisionId === data.decisionId ? null : state.decisionGate,
+        decisionReplay: state.decisionReplay?.decisionId === data.decisionId ? null : state.decisionReplay,
+        decisionSummary: state.decisionSummary?.decisionId === data.decisionId ? null : state.decisionSummary
+      }));
+    });
+
     useSocketStore.setState({ socket });
   };
 
@@ -623,6 +812,13 @@ export const useStore = create<AppState>((set, get) => {
     claims: useChatStore.getState().claims,
     relations: useChatStore.getState().relations,
     discussions: useChatStore.getState().discussions,
+    evidence: useChatStore.getState().evidence,
+    decisions: useChatStore.getState().decisions,
+    decisionGate: useChatStore.getState().decisionGate,
+    decisionReplay: useChatStore.getState().decisionReplay,
+    decisionSummary: useChatStore.getState().decisionSummary,
+    decisionReplayBusy: useChatStore.getState().decisionReplayBusy,
+    workspaceMembers: useChatStore.getState().workspaceMembers,
 
     selectedModels: useUIStore.getState().selectedModels,
     isSidebarOpen: useUIStore.getState().isSidebarOpen,
@@ -909,6 +1105,7 @@ export const useStore = create<AppState>((set, get) => {
       useChatStore.setState({ activeConversation: null, messages: [], collaborativePromptText: '' });
       get().fetchConversations(ws.id);
       get().fetchSavedResponses(ws.id);
+      get().fetchWorkspaceMembers(ws.id);
 
       const user = useAuthStore.getState().user;
       if (user) {
@@ -983,11 +1180,14 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setActiveConversation: (conv) => {
-      useChatStore.setState({ activeConversation: conv, messages: [], hasMoreMessages: false, highlightMessageId: null, claims: [], relations: [], discussions: {} });
+      // Evidence is loaded lazily per claim, so a room switch drops it all —
+      // the detail views repopulate as they're opened.
+      useChatStore.setState({ activeConversation: conv, messages: [], hasMoreMessages: false, highlightMessageId: null, claims: [], relations: [], discussions: {}, evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
       if (conv) {
         get().fetchMessages(conv.id);
         get().fetchClaims(conv.id);
         get().fetchRelations(conv.id);
+        get().fetchDecisions(conv.id);
       }
     },
 
@@ -1176,14 +1376,14 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
-    resolveContradiction: async (relationId, status, resolution) => {
+    resolveContradiction: async (relationId, status, resolution, citedEvidenceIds) => {
       const conv = useChatStore.getState().activeConversation;
       if (!conv || !relationId) return 'This room is no longer active.';
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/relations/${relationId}/${status}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ resolution })
+          body: JSON.stringify({ resolution, citedEvidenceIds: citedEvidenceIds ?? [] })
         });
         if (!res.ok) {
           // Surface the server's reason (403 owner-only, 404 gone, 400 reason
@@ -1216,18 +1416,22 @@ export const useStore = create<AppState>((set, get) => {
       // authoritative and a failure restores the claim.
       const before = useChatStore.getState().claims;
       const beforeRelations = useChatStore.getState().relations;
+      const beforeEvidence = useChatStore.getState().evidence;
+      const { [claimId]: _removed, ...restEvidence } = beforeEvidence;
       useChatStore.setState({
         claims: before.filter((c) => c.id !== claimId),
         // The server cascades edge deletion; mirror it locally so no orphan
         // contradiction outlives the claim it referenced.
-        relations: beforeRelations.filter((r) => r.claimAId !== claimId && r.claimBId !== claimId)
+        relations: beforeRelations.filter((r) => r.claimAId !== claimId && r.claimBId !== claimId),
+        // The claim's evidence goes with it.
+        evidence: restEvidence
       });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}`, { method: 'DELETE' });
-        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations });
+        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
         else get().socket?.emit('claim-deleted', { conversationId: conv.id, claimId });
       } catch (err) {
-        useChatStore.setState({ claims: before, relations: beforeRelations });
+        useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
         console.error('Error deleting claim:', err);
       }
     },
@@ -1237,14 +1441,447 @@ export const useStore = create<AppState>((set, get) => {
       if (!conv) return;
       const before = useChatStore.getState().claims;
       const beforeRelations = useChatStore.getState().relations;
-      useChatStore.setState({ claims: [], relations: [] });
+      const beforeEvidence = useChatStore.getState().evidence;
+      useChatStore.setState({ claims: [], relations: [], evidence: {} });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims`, { method: 'DELETE' });
-        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations });
+        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
         else get().socket?.emit('claims-cleared', { conversationId: conv.id });
       } catch (err) {
-        useChatStore.setState({ claims: before, relations: beforeRelations });
+        useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
         console.error('Error clearing room claims:', err);
+      }
+    },
+
+    // --- EVIDENCE ACTIONS ---
+    //
+    // Evidence is attached to a claim and read inside a claim's detail view or a
+    // contradiction's, where both sides sit side by side. Every action is scoped
+    // through the active room; the server re-checks membership regardless.
+
+    fetchEvidence: async (claimId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !claimId) return;
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}/evidence`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.getState().setEvidenceForClaim(claimId, (data.evidence ?? []) as Evidence[]);
+        }
+      } catch (err) {
+        console.error('Error fetching evidence:', err);
+      }
+    },
+
+    fetchEvidenceForRelation: async (relationId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !relationId) return;
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/relations/${relationId}/evidence`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState((state) => ({
+            evidence: { ...state.evidence, ...(data.evidence ?? {}) as Record<string, Evidence[]> }
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching contradiction evidence:', err);
+      }
+    },
+
+    attachEvidence: async (claimId, input) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !claimId) return 'This room is no longer active.';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}/evidence`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input)
+        });
+        if (!res.ok) {
+          let reason = `The server refused the evidence (HTTP ${res.status}).`;
+          try {
+            const data = await res.json();
+            if (data?.error) reason = data.error;
+          } catch { /* keep the generic reason */ }
+          return reason;
+        }
+        const created: Evidence = await res.json();
+        // The socket echo will also deliver this; upsertEvidence is idempotent.
+        useChatStore.getState().upsertEvidence(created);
+        return null;
+      } catch (err) {
+        console.error('Error attaching evidence:', err);
+        return 'Network error while attaching the evidence. Please try again.';
+      }
+    },
+
+    generateAiEvidence: async (claimId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !claimId) return 'This room is no longer active.';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}/evidence/ai-reference`, {
+          method: 'POST'
+        });
+        if (!res.ok) {
+          let reason = `The server could not generate a reference (HTTP ${res.status}).`;
+          try {
+            const data = await res.json();
+            if (data?.error) reason = data.error;
+          } catch { /* keep the generic reason */ }
+          return reason;
+        }
+        const created: Evidence = await res.json();
+        useChatStore.getState().upsertEvidence(created);
+        return null;
+      } catch (err) {
+        console.error('Error generating an AI reference:', err);
+        return 'Network error while generating the reference. Please try again.';
+      }
+    },
+
+    deleteEvidence: async (claimId, evidenceId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !claimId || !evidenceId) return;
+      const before = useChatStore.getState().evidence[claimId];
+      // Optimistic: the socket echo and the REST response agree on the id.
+      useChatStore.getState().removeEvidence(claimId, evidenceId);
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}/evidence/${evidenceId}`, { method: 'DELETE' });
+        if (!res.ok && before) {
+          useChatStore.getState().setEvidenceForClaim(claimId, before);
+        }
+      } catch (err) {
+        if (before) useChatStore.getState().setEvidenceForClaim(claimId, before);
+        console.error('Error deleting evidence:', err);
+      }
+    },
+
+    // ── DECISIONS ───────────────────────────────────────────────────────
+    // The room's formal decisions and the evidence gate that guards them. The
+    // gate verdict is always the server's; these actions only carry it to the
+    // UI. A decision's state is never mutated locally and then assumed — every
+    // write round-trips through the route that enforces the gate.
+
+    fetchDecisions: async (conversationId) => {
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conversationId}/decisions`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState({ decisions: (data.decisions ?? []) as Decision[] });
+        }
+      } catch (err) {
+        console.error('Error fetching decisions:', err);
+      }
+    },
+
+    fetchDecisionGate: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return;
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState({ decisionGate: (data.gate ?? null) as DecisionGateResult | null });
+        }
+      } catch (err) {
+        console.error('Error fetching the decision gate:', err);
+      }
+    },
+
+    fetchDecisionReplay: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return;
+      useChatStore.setState({ decisionReplayBusy: true });
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/timeline`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState({ decisionReplay: (data ?? null) as DecisionReplay | null });
+        }
+      } catch (err) {
+        console.error('Error fetching the decision timeline:', err);
+      } finally {
+        useChatStore.setState({ decisionReplayBusy: false });
+      }
+    },
+
+    fetchDecisionSummary: async (decisionId, narrate) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return;
+      useChatStore.setState({ decisionReplayBusy: true });
+      try {
+        const url = narrate
+          ? `${API_BASE}/messages/${conv.id}/decisions/${decisionId}/summary?narrate=true`
+          : `${API_BASE}/messages/${conv.id}/decisions/${decisionId}/summary`;
+        const res = await secureFetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState({ decisionSummary: (data ?? null) as DecisionSummary | null });
+        }
+      } catch (err) {
+        console.error('Error fetching the decision summary:', err);
+      } finally {
+        useChatStore.setState({ decisionReplayBusy: false });
+      }
+    },
+
+    clearDecisionReplay: () => {
+      useChatStore.setState({ decisionReplay: null, decisionSummary: null });
+    },
+
+    createDecision: async (input) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv) return null;
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: input.title,
+            statement: input.statement,
+            claimIds: input.claimIds ?? [],
+            requiredApproverIds: input.requiredApproverIds ?? []
+          })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to create the decision';
+        }
+        const data = await res.json();
+        // The socket echo will refresh the list; fetch anyway so a quiet room
+        // (no other clients) still updates immediately.
+        await get().fetchDecisions(conv.id);
+        return data.decision?.id ?? null;
+      } catch (err) {
+        console.error('Error creating decision:', err);
+        return 'Failed to create the decision';
+      }
+    },
+
+    editDecision: async (decisionId, patch) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch)
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to edit the decision';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error editing decision:', err);
+        return 'Failed to edit the decision';
+      }
+    },
+
+    setDecisionClaims: async (decisionId, claimIds) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/claims`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claimIds })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to update the decision claims';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error linking decision claims:', err);
+        return 'Failed to update the decision claims';
+      }
+    },
+
+    setDecisionApprovers: async (decisionId, approverIds) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/approvers`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requiredApproverIds: approverIds })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to update the required approvers';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error setting decision approvers:', err);
+        return 'Failed to update the required approvers';
+      }
+    },
+
+    approveDecision: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to record the approval';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error approving decision:', err);
+        return 'Failed to record the approval';
+      }
+    },
+
+    withdrawDecisionApproval: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/approve`, {
+          method: 'DELETE'
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to withdraw the approval';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error withdrawing approval:', err);
+        return 'Failed to withdraw the approval';
+      }
+    },
+
+    finalizeDecision: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/finalize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          // The gate refusal carries the blocker list; join it into the message
+          // the UI shows so the room sees exactly what is still in the way.
+          const blockers: string[] = (data?.blockers ?? []).map((b: { message: string }) => b.message);
+          if (blockers.length > 0) {
+            return `${data?.error ?? 'The evidence gate is not satisfied'}\n${blockers.map((m) => `• ${m}`).join('\n')}`;
+          }
+          return data?.error ?? 'Failed to finalize the decision';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        if (data.gate) {
+          useChatStore.setState({ decisionGate: data.gate });
+        }
+        return null;
+      } catch (err) {
+        console.error('Error finalizing decision:', err);
+        return 'Failed to finalize the decision';
+      }
+    },
+
+    reopenDecision: async (decisionId, reason) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}/reopen`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to reopen the decision';
+        }
+        const data = await res.json();
+        if (data.decision) {
+          useChatStore.setState((state) => ({
+            decisions: state.decisions.map((d) => (d.id === decisionId ? data.decision : d))
+          }));
+        }
+        return null;
+      } catch (err) {
+        console.error('Error reopening decision:', err);
+        return 'Failed to reopen the decision';
+      }
+    },
+
+    deleteDecision: async (decisionId) => {
+      const conv = useChatStore.getState().activeConversation;
+      if (!conv || !decisionId) return 'No room selected';
+      try {
+        const res = await secureFetch(`${API_BASE}/messages/${conv.id}/decisions/${decisionId}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data?.error ?? 'Failed to delete the decision';
+        }
+        useChatStore.setState((state) => ({
+          decisions: state.decisions.filter((d) => d.id !== decisionId),
+          decisionGate: state.decisionGate?.decisionId === decisionId ? null : state.decisionGate,
+          decisionReplay: state.decisionReplay?.decisionId === decisionId ? null : state.decisionReplay,
+          decisionSummary: state.decisionSummary?.decisionId === decisionId ? null : state.decisionSummary
+        }));
+        return null;
+      } catch (err) {
+        console.error('Error deleting decision:', err);
+        return 'Failed to delete the decision';
+      }
+    },
+
+    resetDecisions: () => {
+      useChatStore.setState({ decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
+    },
+
+    /** Loads the workspace's member roster for the approver picker. */
+    fetchWorkspaceMembers: async (workspaceId) => {
+      try {
+        const res = await secureFetch(`${API_BASE}/workspaces/${workspaceId}/members`);
+        if (res.ok) {
+          const data = await res.json();
+          useChatStore.setState({ workspaceMembers: (data.members ?? []) as WorkspaceMember[] });
+        }
+      } catch (err) {
+        console.error('Error fetching workspace members:', err);
       }
     },
 
@@ -1255,15 +1892,21 @@ export const useStore = create<AppState>((set, get) => {
         messages: useChatStore.getState().messages,
         claims: useChatStore.getState().claims,
         relations: useChatStore.getState().relations,
+        evidence: useChatStore.getState().evidence,
       };
       const removedClaims = before.claims.filter((c) => c.messageId === messageId).map((c) => c.id);
       // Optimistic: drop the row and the room memory derived from it. The REST
       // call is authoritative and restores everything if it refuses.
-      useChatStore.setState((state) => ({
-        messages: state.messages.filter((m) => m.id !== messageId),
-        claims: state.claims.filter((c) => c.messageId !== messageId),
-        relations: state.relations.filter((r) => !removedClaims.includes(r.claimAId) && !removedClaims.includes(r.claimBId)),
-      }));
+      useChatStore.setState((state) => {
+        const restEvidence = { ...state.evidence };
+        for (const id of removedClaims) delete restEvidence[id];
+        return {
+          messages: state.messages.filter((m) => m.id !== messageId),
+          claims: state.claims.filter((c) => c.messageId !== messageId),
+          relations: state.relations.filter((r) => !removedClaims.includes(r.claimAId) && !removedClaims.includes(r.claimBId)),
+          evidence: restEvidence,
+        };
+      });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/${messageId}`, { method: 'DELETE' });
         if (!res.ok) {
@@ -1285,10 +1928,11 @@ export const useStore = create<AppState>((set, get) => {
         claims: useChatStore.getState().claims,
         relations: useChatStore.getState().relations,
         discussions: useChatStore.getState().discussions,
+        evidence: useChatStore.getState().evidence,
       };
       // The room's memory is derived from its messages, so clearing the chat
       // clears the claims and contradictions with it.
-      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {} });
+      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {} });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}`, { method: 'DELETE' });
         if (!res.ok) {
@@ -1530,6 +2174,16 @@ useChatStore.subscribe((state) => {
     claims: state.claims,
     relations: state.relations,
     discussions: state.discussions,
+    // Evidence lives in chatStore and is read through useStore by EvidenceList;
+    // without this entry every attach/delete updates chatStore but the
+    // component never re-renders, so nothing appears.
+    evidence: state.evidence,
+    decisions: state.decisions,
+    decisionGate: state.decisionGate,
+    decisionReplay: state.decisionReplay,
+    decisionSummary: state.decisionSummary,
+    decisionReplayBusy: state.decisionReplayBusy,
+    workspaceMembers: state.workspaceMembers,
   });
 });
 

@@ -72,7 +72,7 @@ export default function HomePage() {
           <div className="flex items-center gap-2.5 select-none">
             <MindMark size={30} />
             <span className="font-bold text-cream tracking-tight text-lg">
-              Collab<span className="text-ember">Z</span>
+              Mind<span className="text-ember">Sync</span>
             </span>
           </div>
 
@@ -370,7 +370,7 @@ export default function HomePage() {
           <div className="flex items-center gap-2.5 select-none">
             <MindMark size={24} />
             <span className="font-bold text-cream tracking-tight">
-              Collab<span className="text-ember">Z</span>
+              Mind<span className="text-ember">Sync</span>
             </span>
             <span className="text-[13px] font-mono text-faint ml-2">BUILD {BRAND.version}-STABLE</span>
           </div>

@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { useStore } from '../store';
-import { Sparkles, CornerDownRight, Trash2, Zap, ArrowLeft, Send, X } from 'lucide-react';
+import { Sparkles, CornerDownRight, Trash2, Zap, ArrowLeft, Send, X, ScrollText } from 'lucide-react';
 import type { Claim, DiscussionComment } from '../types';
 import Portal from '../hooks/Portal';
 import ContradictionDiscussion from './ContradictionDiscussion';
+import EvidenceList from './EvidenceList';
 
 const PANEL_WIDTH = 380;
 const PANEL_MAX_HEIGHT = 460;
@@ -29,6 +30,8 @@ export default function ClaimsPanel() {
   const [confirmingClear, setConfirmingClear] = useState(false);
   /** Id of the contradiction whose detail view is open; null shows the list. */
   const [detailId, setDetailId] = useState<string | null>(null);
+  /** Id of the claim whose detail (evidence) view is open; null shows the list. */
+  const [claimDetailId, setClaimDetailId] = useState<string | null>(null);
   const [commentText, setCommentText] = useState('');
   /** Comment the composer is answering; null for a top-level comment. */
   const [replyTo, setReplyTo] = useState<DiscussionComment | null>(null);
@@ -36,6 +39,7 @@ export default function ClaimsPanel() {
   // Read from the store rather than stashing the object, so a close broadcast
   // updates the open view without the panel needing to refetch anything.
   const detail = relations.find((r) => r.id === detailId) ?? null;
+  const claimDetail = claims.find((c) => c.id === claimDetailId) ?? null;
 
   const disabled = !activeConversation;
   const count = claims.length;
@@ -45,6 +49,12 @@ export default function ClaimsPanel() {
   // Workspace owner or admin may resolve/dismiss — the same authorization the
   // workspace's own deletion requires.
   const canResolve = !!activeWorkspace && !!user && (activeWorkspace.ownerId === user.id || user.role === 'admin');
+  // Any member may attach evidence or join the discussion, matching the room's
+  // participation rules.
+  const canContribute =
+    !!activeWorkspace &&
+    !!user &&
+    (activeWorkspace.ownerId === user.id || (activeWorkspace.memberIds || []).includes(user.id) || user.role === 'admin');
 
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -63,8 +73,8 @@ export default function ClaimsPanel() {
   // Close on Escape / resize
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setConfirmingClear(false); setDetailId(null); setReplyTo(null); } };
-    const onResize = () => { setOpen(false); setConfirmingClear(false); setDetailId(null); setReplyTo(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); setConfirmingClear(false); setDetailId(null); setClaimDetailId(null); setReplyTo(null); } };
+    const onResize = () => { setOpen(false); setConfirmingClear(false); setDetailId(null); setClaimDetailId(null); setReplyTo(null); };
     window.addEventListener('keydown', onKey);
     window.addEventListener('resize', onResize);
     return () => {
@@ -80,6 +90,7 @@ export default function ClaimsPanel() {
 
   const handleDelete = (claim: Claim) => {
     deleteClaim(claim.id);
+    if (claimDetailId === claim.id) setClaimDetailId(null);
     setConfirmingClear(false);
   };
 
@@ -106,7 +117,7 @@ export default function ClaimsPanel() {
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => { setOpen((v) => !v); setConfirmingClear(false); setDetailId(null); setReplyTo(null); }}
+        onClick={() => { setOpen((v) => !v); setConfirmingClear(false); setDetailId(null); setClaimDetailId(null); setReplyTo(null); }}
         disabled={disabled}
         className="relative flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border bg-panel-2 border-line text-sand hover:text-cream hover:border-line-2 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         title={disabled ? 'Select a room to view claims' : 'Claims the AI has established in this room'}
@@ -164,7 +175,7 @@ export default function ClaimsPanel() {
                 shrink and crowds the claims out of the scrollable area. */}
             <div className="flex-1 min-h-0 overflow-y-auto">
             {/* Contradiction graph edges */}
-            {contradictions.length > 0 && !detail && (
+            {contradictions.length > 0 && !detail && !claimDetail && (
               <div className="border-b border-line">
                 <div className="flex items-center gap-1.5 px-3 py-1.5">
                   <Zap size={12} className="text-rust shrink-0" />
@@ -264,6 +275,20 @@ export default function ClaimsPanel() {
                     <p className="text-xs text-sand leading-relaxed">{detail.claimBText}</p>
                   </div>
 
+                  {/* Evidence on both sides, laid out side by side, so the room
+                      weighs what actually backs each claim while deciding. */}
+                  <div className="rounded-xl border border-line bg-line/20 p-2.5 space-y-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-faint">Evidence on the table</p>
+                    <div>
+                      <p className="text-[9px] font-bold text-rust mb-1">Claim A</p>
+                      <EvidenceList claimId={detail.claimAId} compact canContribute={canContribute} />
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-bold text-rust mb-1">Claim B</p>
+                      <EvidenceList claimId={detail.claimBId} compact canContribute={canContribute} />
+                    </div>
+                  </div>
+
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-faint mb-1">Explanation</p>
                     <p className="text-xs text-sand leading-relaxed">{detail.explanation}</p>
@@ -347,6 +372,54 @@ export default function ClaimsPanel() {
                   </form>
                 </div>
               </div>
+            ) : claimDetail ? (
+              <div className="flex flex-col min-h-0 h-full">
+                {/* Back header */}
+                <div className="shrink-0 flex items-center gap-2 px-3 pt-2.5 pb-2 border-b border-line">
+                  <button
+                    type="button"
+                    onClick={() => setClaimDetailId(null)}
+                    className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] font-medium text-faint hover:text-cream hover:bg-line transition-colors cursor-pointer"
+                  >
+                    <ArrowLeft size={12} />
+                    Back
+                  </button>
+                  <p className="text-sm font-semibold text-cream">Claim</p>
+                  <button
+                    type="button"
+                    onClick={() => { setClaimDetailId(null); jumpToMessage(claimDetail.messageId, claimDetail.createdAt); }}
+                    title="Jump to the response this claim came from"
+                    className="ml-auto flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] font-medium text-faint hover:text-ember-soft hover:bg-ember/10 transition-colors cursor-pointer"
+                  >
+                    <CornerDownRight size={12} />
+                    Jump to source
+                  </button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+                  <div className="rounded-xl border border-ember/30 bg-ember/[0.05] p-2.5">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-ember/10 border border-ember/30 text-ember-soft shrink-0">
+                        {claimDetail.modelName}
+                      </span>
+                      <span className="text-[10px] font-mono text-faint shrink-0">
+                        {new Date(claimDetail.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(claimDetail)}
+                        title="Delete this claim"
+                        className="ml-auto p-1 rounded-md text-faint hover:text-rust hover:bg-rust/10 transition-colors cursor-pointer"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                    <p className="text-xs text-sand leading-relaxed">{claimDetail.text}</p>
+                  </div>
+
+                  <EvidenceList claimId={claimDetail.id} canContribute={canContribute} />
+                </div>
+              </div>
             ) : (
               <>
               {/* Claims list */}
@@ -371,6 +444,18 @@ export default function ClaimsPanel() {
                       <CornerDownRight size={11} className="text-faint ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                     </div>
                     <p className="text-xs text-sand leading-relaxed pr-7">{claim.text}</p>
+                  </button>
+
+                  {/* Per-claim evidence viewer (outside the jump button so
+                      nesting stays valid) */}
+                  <button
+                    type="button"
+                    onClick={() => setClaimDetailId(claim.id)}
+                    title="View and attach evidence for this claim"
+                    className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-semibold text-faint opacity-0 group-hover:opacity-100 hover:text-ember-soft hover:bg-ember/10 transition-all cursor-pointer"
+                  >
+                    <ScrollText size={10} />
+                    Evidence
                   </button>
 
                   {/* Per-claim delete (outside the button so nesting stays valid) */}
@@ -400,10 +485,10 @@ export default function ClaimsPanel() {
             )}
             </div>
 
-            {count > 0 && !detail && (
+            {count > 0 && !detail && !claimDetail && (
               <div className="shrink-0 px-3 py-2 border-t border-line">
                 <p className="text-[10px] font-mono text-faint">
-                  {count} claim{count === 1 ? '' : 's'}{contradictions.length > 0 ? ` · ${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'}` : ''} — click to jump, hover to delete
+                  {count} claim{count === 1 ? '' : 's'}{contradictions.length > 0 ? ` · ${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'}` : ''} — click to jump, hover to delete or open evidence
                 </p>
               </div>
             )}

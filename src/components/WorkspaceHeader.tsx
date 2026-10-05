@@ -2,6 +2,7 @@ import { useStore } from '../store';
 import { Hash, Users, BookmarkCheck, Cpu, Circle, Wifi, LayoutGrid, Globe } from 'lucide-react';
 import SearchPanel from './SearchPanel';
 import ClaimsPanel from './ClaimsPanel';
+import DecisionPanel from './DecisionPanel';
 
 const MODEL_LABELS: Record<string, string> = {
   'gemini-2.5-flash': 'Gemini 2.5',
@@ -102,6 +103,9 @@ export default function WorkspaceHeader() {
 
       {/* Room claims (persistent AI context) */}
       <ClaimsPanel />
+
+      {/* Decisions and the evidence gate */}
+      <DecisionPanel />
 
       {/* Pinned Toggle */}
       <button type="button" onClick={() => setSavedResponsesOpen(!isSavedResponsesOpen)}
