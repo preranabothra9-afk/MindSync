@@ -1,4 +1,5 @@
 import { db } from './database';
+import { buildDecisionContext, MAX_DECISION_CONTEXT_CHARS } from './decisionContext';
 import { Message } from '../src/types';
 
 // ---------------------------------------------------------------------------
@@ -24,8 +25,15 @@ const MAX_CLAIM_LENGTH = 220;
 const MAX_CONTEXT_MESSAGES = 6;
 const MAX_CONTEXT_CLAIMS = 10;
 const MAX_EXCERPT_CHARS = 380;
-/** Hard ceiling so the preamble can never swamp a small context window. */
-const MAX_CONTEXT_CHARS = 3200;
+/**
+ * Hard ceiling so the preamble can never swamp the model's context window.
+ *
+ * It is the sum of two budgets rather than one shared pool: the decision record
+ * bounds itself (see MAX_DECISION_CONTEXT_CHARS) and the chat excerpt bounds
+ * itself here. A room with a big record therefore cannot crowd the chat out,
+ * and a room with a long transcript cannot crowd the record out.
+ */
+const MAX_CONTEXT_CHARS = MAX_DECISION_CONTEXT_CHARS + 3000;
 
 // Sentences starting with these are conversational furniture or meta commentary,
 // not statements about the subject matter.
@@ -295,16 +303,27 @@ function firstCompletedResponse(message: Message): { modelName: string; content:
  * Assembles a bounded, model-agnostic context preamble for a room, then appends
  * the new prompt the user actually submitted.
  *
- * Only real, stored messages and claims are ever quoted, and the preamble says
- * so explicitly — the model is told to answer the new prompt, treat the quoted
- * history as the sole source of truth about "what was discussed", and never
- * invent beyond it.
+ * Two independent blocks feed it, each bounded on its own:
+ *
+ * - **The decision record** — decisions, contradictions, discussions, polls,
+ *   evidence, resolutions, approvals and gate state, relevance-sliced to what
+ *   this question is about. This is what lets the model answer "what did we
+ *   disagree about?" from storage instead of from a handful of chat excerpts.
+ * - **The chat excerpt** — a few recent exchanges, as before.
+ *
+ * Only real, stored material is ever quoted, and the preamble says so
+ * explicitly: the model is told to treat the quoted history as the sole source
+ * truth about what was previously said or decided, and never invent beyond it.
  */
 export async function buildRoomContext(
   conversationId: string,
   newPrompt: string
 ): Promise<{ prompt: string; hasContext: boolean }> {
-  const [recent, claims] = await Promise.all([
+  // Fetched together and once: N selected models cost one lookup rather than N,
+  // and every model sees identical grounding. The current message has no
+  // completed responses yet, so it is naturally excluded from its own context.
+  const [record, recent, claims] = await Promise.all([
+    buildDecisionContext(conversationId, newPrompt),
     db.getMessages(conversationId, { limit: MAX_CONTEXT_MESSAGES + 6 }),
     db.getClaims(conversationId, MAX_CONTEXT_CLAIMS + 6),
   ]);
@@ -317,49 +336,71 @@ export async function buildRoomContext(
   const recentClaims = claims.slice(0, MAX_CONTEXT_CLAIMS);
 
   // Nothing to ground on yet — first prompt in the room gets a clean slate.
-  if (withAnswers.length === 0 && recentClaims.length === 0) {
+  if (withAnswers.length === 0 && recentClaims.length === 0 && !record.hasDecisionContext) {
     return { prompt: newPrompt, hasContext: false };
   }
 
-  const lines: string[] = [
-    '## Ongoing room context',
-    '',
-    'The room below has an ongoing discussion. Treat the quoted history as the ONLY',
-    'source of truth about what was previously said. Use it to keep your answer',
-    'consistent where it is relevant, and NEVER invent, guess, or allude to earlier',
-    'messages beyond what is quoted here.',
-  ];
-
-  if (recentClaims.length > 0) {
-    lines.push('', '### Established claims from earlier AI responses');
-    for (const claim of recentClaims) {
-      lines.push(`- ${excerpt(claim.text, MAX_CLAIM_LENGTH)} — *${claim.modelName}*`);
-    }
+  // Flattened up front so overflow can shed them a piece at a time rather than
+  // all at once.
+  const messageLines: string[] = [];
+  for (const message of withAnswers) {
+    const response = firstCompletedResponse(message)!;
+    messageLines.push(`**${message.senderName}** asked: ${excerpt(message.promptText, MAX_EXCERPT_CHARS)}`);
+    messageLines.push(`**${response.modelName}** answered: ${excerpt(response.content, MAX_EXCERPT_CHARS)}`);
+    messageLines.push('');
   }
+  const claimLines = recentClaims.map(
+    (claim) => `- ${excerpt(claim.text, MAX_CLAIM_LENGTH)} — *${claim.modelName}*`
+  );
 
-  if (withAnswers.length > 0) {
-    lines.push('', '### Recent messages');
-    for (const message of withAnswers) {
-      const response = firstCompletedResponse(message)!;
-      lines.push(`**${message.senderName}** asked: ${excerpt(message.promptText, MAX_EXCERPT_CHARS)}`);
-      lines.push(`**${response.modelName}** answered: ${excerpt(response.content, MAX_EXCERPT_CHARS)}`);
-      lines.push('');
+  // Mutable so a hopeless overrun has somewhere left to retreat to.
+  let decisionBlock = record.section;
+
+  const compose = (): string => {
+    const parts: string[] = [];
+
+    if (decisionBlock) parts.push(decisionBlock, '');
+
+    if (claimLines.length > 0 || messageLines.length > 0) {
+      parts.push(
+        '## Ongoing room context',
+        '',
+        'The room below has an ongoing discussion. Treat the quoted history as the ONLY',
+        'source of truth about what was previously said. Use it to keep your answer',
+        'consistent where it is relevant, and NEVER invent, guess, or allude to earlier',
+        'messages beyond what is quoted here.',
+        ''
+      );
+      if (claimLines.length > 0) {
+        parts.push('### Established claims from earlier AI responses', ...claimLines, '');
+      }
+      if (messageLines.length > 0) {
+        parts.push('### Recent messages', ...messageLines);
+      }
     }
+
+    parts.push('---', '', '## New prompt to answer now', '', newPrompt.trim());
+    return parts.join('\n');
+  };
+
+  let context = compose();
+
+  // Overflow sheds the least valuable material first: oldest chat excerpt,
+  // then the remaining claims. The record only goes if the prompt itself is
+  // enormous. The grounding rules and the new prompt never move.
+  while (context.length > MAX_CONTEXT_CHARS && messageLines.length > 0) {
+    const before = messageLines.length;
+    messageLines.splice(0, 3); // asked / answered / spacer for one exchange
+    if (messageLines.length === before) break;
+    context = compose();
   }
-
-  lines.push('---');
-  lines.push('');
-  lines.push('## New prompt to answer now');
-  lines.push('');
-  lines.push(newPrompt.trim());
-
-  // Trim oldest context until the preamble fits the budget. Claims are kept
-  // (they are the distilled memory); messages are dropped from the top.
-  let context = lines.join('\n');
-  while (context.length > MAX_CONTEXT_CHARS) {
-    const trimmed = context.split('\n').slice(1).join('\n');
-    if (trimmed.length >= context.length) break;
-    context = trimmed;
+  while (context.length > MAX_CONTEXT_CHARS && claimLines.length > 0) {
+    claimLines.pop();
+    context = compose();
+  }
+  if (context.length > MAX_CONTEXT_CHARS && decisionBlock) {
+    decisionBlock = '';
+    context = compose();
   }
 
   return { prompt: context, hasContext: true };

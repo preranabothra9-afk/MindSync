@@ -971,6 +971,33 @@ class MongoDatabaseAdapter {
     };
   }
 
+  /**
+   * Comment threads and poll tallies for many contradictions at once, keyed by
+   * relationId. The AI decision context needs whichever threads it is about to
+   * quote, and asking relation-by-relation would turn one prompt into dozens of
+   * round trips. Two queries regardless of how many edges are asked for.
+   */
+  async getDiscussionsForRelations(relationIds: string[]): Promise<Record<string, ContradictionDiscussion>> {
+    const map: Record<string, ContradictionDiscussion> = {};
+    if (!relationIds || relationIds.length === 0) return map;
+
+    const [commentDocs, voteDocs] = await Promise.all([
+      DiscussionCommentModel.find({ relationId: { $in: relationIds } }).sort({ createdAt: 1, _id: 1 }).lean(),
+      ContradictionVoteModel.find({ relationId: { $in: relationIds } }).lean(),
+    ]);
+
+    for (const id of relationIds) map[id] = { comments: [], votes: [] };
+    for (const d of commentDocs as any[]) {
+      const c = { ...d, id: d._id } as unknown as DiscussionComment;
+      (map[c.relationId] ??= { comments: [], votes: [] }).comments.push(c);
+    }
+    for (const d of voteDocs as any[]) {
+      const v = { ...d, id: d._id } as unknown as ContradictionVote;
+      (map[v.relationId] ??= { comments: [], votes: [] }).votes.push(v);
+    }
+    return map;
+  }
+
   /** Stores one comment or reply. */
   async addComment(comment: DiscussionComment): Promise<DiscussionComment> {
     const created = await DiscussionCommentModel.create({
