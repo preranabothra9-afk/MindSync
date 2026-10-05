@@ -644,6 +644,34 @@ export default function AuthPortal() {
               </p>
             </div>
 
+            {view === 'login' && pendingVerificationEmail && (
+              <div className="bg-ember/5 border border-ember/25 rounded-lg px-3.5 py-3 text-[13px] mb-5 flex items-start gap-2.5">
+                <MailCheck size={15} className="shrink-0 mt-0.5 text-ember" />
+                <div className="min-w-0">
+                  <p className="text-sand font-semibold leading-snug">Verify your email first, then sign in.</p>
+                  <p className="text-faint leading-relaxed mt-1">
+                    We sent a confirmation link to <span className="text-sand font-medium break-all">{pendingVerificationEmail}</span>.
+                    {' '}Your account stays locked until that link is opened.
+                  </p>
+                  {pendingVerificationUrl && verifyState !== 'success' && (
+                    <a
+                      href={pendingVerificationUrl}
+                      className="inline-flex items-center gap-1 text-ember hover:underline font-semibold mt-2"
+                    >
+                      Open the verification link <ExternalLink size={11} />
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setEmail(pendingVerificationEmail || email); switchView('verify'); }}
+                    className="block text-ember hover:underline font-semibold mt-1.5 cursor-pointer"
+                  >
+                    Didn&rsquo;t get it? Send a new link
+                  </button>
+                </div>
+              </div>
+            )}
+
             {(validationError || authError) && (
               <div className="bg-rust/5 border border-rust/20 text-rust rounded-lg px-3 py-2.5 text-[13px] flex items-start gap-2 mb-5 animate-shake">
                 <ShieldAlert size={14} className="shrink-0 mt-0.5" />

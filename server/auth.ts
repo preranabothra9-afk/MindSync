@@ -296,10 +296,23 @@ export async function handleLogin(req: Request, res: Response) {
 
     if (user.isVerified !== true) {
       await db.logAudit(user.id, user.name, user.email, 'FAILED_AUTH', 'Login blocked: email address not yet verified.', undefined, req.ip);
+      // Re-issue a link so the user is not stuck: a login attempt is the moment
+      // they discover the account is unverified, so give them a fresh one. The
+      // URL is only surfaced when mail delivery failed (or in dev), matching the
+      // registration response.
+      const origin = resolvePublicOrigin(req);
+      const { emailed, verificationUrl } = await issueVerificationLink(
+        { id: user.id, name: user.name, email: user.email },
+        origin
+      );
       return res.status(403).json({
         error: 'Please verify your email address before signing in.',
         requiresVerification: true,
         email: user.email,
+        emailSent: emailed,
+        ...(process.env.NODE_ENV !== 'production' || !emailed
+          ? { verificationUrl, dev: process.env.NODE_ENV !== 'production', mailFailed: !emailed }
+          : {}),
       });
     }
 

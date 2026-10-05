@@ -883,6 +883,18 @@ export const useStore = create<AppState>((set, get) => {
           useAuthStore.setState({ isAuthenticating: false });
           return true;
         } else {
+          // An unverified account is rejected with a specific flag. Surface it
+          // separately so the login page can show "verify first" guidance with a
+          // resend action, rather than a bare "login failed" error.
+          if (data.requiresVerification) {
+            useAuthStore.setState({
+              authError: null,
+              isAuthenticating: false,
+              pendingVerificationEmail: data.email || email,
+              pendingVerificationUrl: data.verificationUrl ?? null,
+            });
+            return false;
+          }
           useAuthStore.setState({ authError: data.error || 'Login failed', isAuthenticating: false });
           return false;
         }
