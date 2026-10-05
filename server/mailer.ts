@@ -3,29 +3,57 @@ import nodemailer, { Transporter } from 'nodemailer';
 let cachedTransport: Transporter | null = null;
 
 /**
- * Gmail SMTP transport, kept only as a fallback. Gmail reliably blocks SMTP
- * from cloud hosts (Render, fly.io, ...) by dropping egress on 465/587 or
- * disabling the login, so this is no longer the primary delivery path.
+ * Which SMTP provider is configured, in preference order. Brevo wins over
+ * Gmail because its free tier reaches arbitrary recipients with only a
+ * verified sender, and because it accepts port 2525.
+ */
+type SmtpProvider = 'brevo' | 'gmail';
+
+function smtpProvider(): SmtpProvider | null {
+  if (process.env.BREVO_USER && process.env.BREVO_PASS) return 'brevo';
+  if (process.env.SMTP_USER && process.env.SMTP_PASS) return 'gmail';
+  return null;
+}
+
+/**
+ * SMTP transport. Brevo is the preferred SMTP path: its relay accepts port
+ * 2525, which sidesteps the 465/587 egress blocks that make Gmail unusable on
+ * sandboxed cloud hosts. Gmail remains as a legacy fallback.
  */
 function getSmtpTransport(): Transporter | null {
   if (cachedTransport) return cachedTransport;
 
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const provider = smtpProvider();
+  if (!provider) return null;
 
-  if (!user || !pass) return null;
+  // Without these the socket waits on the OS TCP timeout (~120s) when the
+  // SMTP port is unreachable, which stalls the whole request. Fail fast.
+  const timeouts = {
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
+  };
+
+  if (provider === 'brevo') {
+    cachedTransport = nodemailer.createTransport({
+      // Host/port are overridable but default to Brevo's documented relay.
+      host: process.env.BREVO_HOST || 'smtp-relay.brevo.com',
+      port: Number(process.env.BREVO_PORT) || 2525,
+      secure: false,
+      requireTLS: true,
+      auth: { user: process.env.BREVO_USER!, pass: process.env.BREVO_PASS! },
+      ...timeouts,
+    });
+    return cachedTransport;
+  }
 
   cachedTransport = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 587,
     secure: false,
     requireTLS: true,
-    auth: { user, pass },
-    // Without these the socket waits on the OS TCP timeout (~120s) when the
-    // SMTP port is unreachable, which stalls the whole request. Fail fast.
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 10_000,
+    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
+    ...timeouts,
   });
 
   return cachedTransport;
@@ -35,6 +63,7 @@ function getSmtpTransport(): Transporter | null {
 export function isMailConfigured(): boolean {
   return Boolean(
     process.env.RESEND_API_KEY ||
+      (process.env.BREVO_USER && process.env.BREVO_PASS) ||
       (process.env.SMTP_USER && process.env.SMTP_PASS)
   );
 }
@@ -56,14 +85,27 @@ interface OutboundMail {
  * hosts. Falls back to SMTP when Resend is absent or rejects the request.
  */
 async function deliver(mail: OutboundMail): Promise<boolean> {
-  if (process.env.RESEND_API_KEY) {
-    const ok = await sendViaResend(mail);
-    if (ok) return true;
-    // Fall through to SMTP rather than giving up outright.
+  const provider = smtpProvider();
+
+  // Brevo is tried ahead of Resend: its free tier reaches arbitrary recipients
+  // with only a verified sender address, whereas Resend's shared onboarding
+  // sender is restricted to the account owner until a custom domain is
+  // verified. A Brevo failure still falls through to Resend rather than giving
+  // up outright.
+  if (provider === 'brevo') {
+    const transport = getSmtpTransport();
+    if (transport && (await sendViaSmtp(transport, mail))) return true;
   }
 
-  const transport = getSmtpTransport();
-  if (transport) return sendViaSmtp(transport, mail);
+  if (process.env.RESEND_API_KEY) {
+    if (await sendViaResend(mail)) return true;
+  }
+
+  // Gmail SMTP, legacy fallback only.
+  if (provider === 'gmail') {
+    const transport = getSmtpTransport();
+    if (transport) return sendViaSmtp(transport, mail);
+  }
 
   return false;
 }
@@ -108,9 +150,14 @@ async function sendViaSmtp(
   transport: Transporter,
   mail: OutboundMail
 ): Promise<boolean> {
+  // The from address is the provider login, which must be a verified sender on
+  // that account (Brevo: BREVO_USER, Gmail: SMTP_USER).
+  const fromAddress = process.env.BREVO_USER || process.env.SMTP_USER;
+  if (!fromAddress) return false;
+
   try {
     await transport.sendMail({
-      from: `"${brandName()}" <${process.env.SMTP_USER}>`,
+      from: `"${brandName()}" <${fromAddress}>`,
       to: mail.to,
       subject: mail.subject,
       text: mail.text,
