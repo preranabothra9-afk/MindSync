@@ -440,7 +440,53 @@ async function main(): Promise<void> {
     r = await drive(app, 'POST', `${base}/${owned.body?.decision?.id}/approve`, { token: memberToken });
     check('non-required approver refused → 403', r.status === 403, JSON.stringify(r.body));
 
-    // ── 7. Immutability of the history array ────────────────────────────
+    // ── 7. The workspace boundary ──────────────────────────────────────
+    console.log('\n— workspace boundary —');
+
+    // Every workspace route sits behind requireVerifiedAuth. The gate must
+    // block an unconfirmed account holding a perfectly valid token...
+    r = await drive(app, 'GET', '/workspaces', { token: ownerToken });
+    check('unverified account refused → 403', r.status === 403, JSON.stringify(r.body));
+
+    r = await drive(app, 'GET', '/workspaces');
+    check('missing token refused → 401', r.status === 401, JSON.stringify(r.body));
+
+    // ...and then let a verified one through, or the hub would show nobody
+    // any workspaces at all. This is the failure a middleware like this is
+    // most likely to have: blocking everything instead of the wrong thing.
+    await UserModel.findByIdAndUpdate(owner.id, { isVerified: true });
+    await UserModel.findByIdAndUpdate(member.id, { isVerified: true });
+    if (outsider) await UserModel.findByIdAndUpdate(outsider.id, { isVerified: true });
+    r = await drive(app, 'GET', '/workspaces', { token: ownerToken });
+    const listed: any[] = Array.isArray(r.body) ? r.body : [];
+    check('verified account can list workspaces → 200', r.status === 200, JSON.stringify(r.body));
+    check('its own workspace is in the list',
+      listed.some((w) => String(w.id ?? w._id) === String(ws._id)));
+
+    // Channels are scoped to a workspace. An outsider must not be able to
+    // enumerate them, nor delete one by guessing its id.
+    r = await drive(app, 'GET', `/conversations?workspaceId=${ws._id}`, { token: outsiderToken });
+    check('non-member cannot list channels → 403', r.status === 403, JSON.stringify(r.body));
+
+    const anyConv = await ConversationModel.findOne({ workspaceId: ws._id }).lean();
+    check('the room has a channel to defend', !!anyConv);
+    if (anyConv) {
+      const convId = String((anyConv as any)._id);
+      r = await drive(app, 'DELETE', `/conversations/${convId}`, { token: outsiderToken });
+      check('non-member cannot delete a channel → 403', r.status === 403, JSON.stringify(r.body));
+      check('the channel is still there', !!(await ConversationModel.findById(convId)));
+    }
+
+    // Adding somebody to a workspace decides who can read every room inside
+    // it, so it is the owner's call — a plain member may not do it.
+    r = await drive(app, 'POST', `/workspaces/${ws._id}/invite`, {
+      token: memberToken,
+      body: { email: `gate-invited-${suffix}@collabz.test` }
+    });
+    check('member cannot invite → 403', r.status === 403, JSON.stringify(r.body));
+    check('nobody was added', !(await db.getUserByEmail(`gate-invited-${suffix}@collabz.test`)));
+
+    // ── 8. Immutability of the history array ────────────────────────────
     console.log('\n— history immutability —');
 
     const finalDoc = await DecisionModel.findById(decisionId).lean();
@@ -453,7 +499,7 @@ async function main(): Promise<void> {
     check('the earlier entries are byte-identical',
       JSON.stringify((finalDoc?.history ?? []).slice(0, beforeCount)) === JSON.stringify((afterDoc?.history ?? []).slice(0, beforeCount)));
 
-    // ── 8. Clearing a room removes its decisions ────────────────────────
+    // ── 9. Clearing a room removes its decisions ────────────────────────
     console.log('\n— room teardown —');
 
     await db.clearConversationMessages(conv.id);
