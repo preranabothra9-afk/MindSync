@@ -418,6 +418,11 @@ export default function WorkspaceHub() {
                               Active
                             </span>
                           )}
+                          {!isMember && !isOwner && (
+                            <span className="px-2 py-0.5 rounded-md font-mono text-[13px] font-bold uppercase bg-faint/10 text-faint border border-faint/20 flex items-center gap-1">
+                              <LogOut size={9} /> Left
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -472,7 +477,9 @@ export default function WorkspaceHub() {
                           )}
                           <button
                             onClick={() => handleEnter(ws)}
-                            className="px-3 py-1.5 rounded-xl bg-ember hover:bg-ember-2 text-on-ember text-[13px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-lg shadow-ember/20 btn-3d"
+                            disabled={!isMember}
+                            title={!isMember ? 'You have left this workspace and can only rejoin by invitation.' : undefined}
+                            className={`px-3 py-1.5 rounded-xl text-[13px] font-bold transition-all flex items-center gap-1 shadow-lg shadow-ember/20 btn-3d ${!isMember ? 'bg-panel-2 border border-line/60 text-faint cursor-not-allowed opacity-60' : 'bg-ember hover:bg-ember-2 text-on-ember cursor-pointer'}`}
                           >
                             Enter
                             <ArrowRight size={11} />
