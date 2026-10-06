@@ -33,6 +33,7 @@ export default function Sidebar() {
   const setAdminPanelOpen = useStore((s) => s.setAdminPanelOpen);
   const logout = useStore((s) => s.logout);
   const navigateTo = useStore((s) => s.navigateTo);
+  const leaveWorkspace = useStore((s) => s.leaveWorkspace);
 
   const collapsed = !isSidebarOpen;
   const [isWsMenuOpen, setIsWsMenuOpen] = useState(false);
@@ -44,6 +45,8 @@ export default function Sidebar() {
   const [conversationToDelete, setConversationToDelete] = useState<string | null>(null);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [workspaceToLeave, setWorkspaceToLeave] = useState<string | null>(null);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
 
   const handleCreateWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +67,30 @@ export default function Sidebar() {
 
   const confirmDeleteWorkspace = () => { if (workspaceToDelete) { deleteWorkspace(workspaceToDelete); setWorkspaceToDelete(null); } };
   const confirmDeleteConversation = () => { if (conversationToDelete) { deleteConversation(conversationToDelete); setConversationToDelete(null); } };
+
+  // Owners need to pick a successor, which the hub's transfer dialog handles;
+  // a member leaving is simple enough to confirm inline here.
+  const handleLeaveClick = () => {
+    if (!activeWorkspace) return;
+    setLeaveError(null);
+    if (activeWorkspace.ownerId === user?.id) {
+      setWorkspaceToLeave(null);
+      navigateTo('/workspaces');
+      return;
+    }
+    setWorkspaceToLeave(activeWorkspace.id);
+  };
+
+  const confirmLeaveWorkspace = async () => {
+    if (!workspaceToLeave) return;
+    const result = await leaveWorkspace(workspaceToLeave);
+    if (!result.success) {
+      setLeaveError(result.error);
+      return;
+    }
+    setWorkspaceToLeave(null);
+    setLeaveError(null);
+  };
 
   const workspaceNameBeingDeleted = workspaces.find(w => w.id === workspaceToDelete)?.name || '';
   const conversationTitleBeingDeleted = conversations.find(c => c.id === conversationToDelete)?.title || '';
@@ -261,6 +288,12 @@ export default function Sidebar() {
           className={`w-full flex items-center gap-2.5 ${labels ? 'px-3' : 'px-0 justify-center'} py-2 font-medium text-[13px] rounded-xl bg-gradient-to-r from-ember to-ember-2 text-white cursor-pointer transition-all btn-3d shadow-lg shadow-ember/20`} title="Invite">
           <Users size={13} className="shrink-0" />{labels && <span>Invite</span>}
         </button>
+        {activeWorkspace && (
+          <button type="button" onClick={handleLeaveClick}
+            className={`w-full flex items-center gap-2.5 ${labels ? 'px-3' : 'px-0 justify-center'} py-2 font-medium text-[13px] rounded-xl border bg-panel-2/50 border-line/60 text-sand hover:text-rust hover:border-rust/40 cursor-pointer transition-all`} title="Leave workspace">
+            <LogOut size={13} className="shrink-0" />{labels && <span>Leave workspace</span>}
+          </button>
+        )}
         {user?.role === 'admin' && (
           <button type="button" onClick={() => setAdminPanelOpen(true)}
             className={`w-full flex items-center gap-2.5 ${labels ? 'px-3' : 'px-0 justify-center'} py-2 font-medium text-[13px] rounded-xl border bg-ember/5 hover:bg-ember/10 text-ember-soft border-ember/20 cursor-pointer transition-all`} title="Admin">
@@ -341,6 +374,26 @@ export default function Sidebar() {
             <div className="flex gap-2">
               <button type="button" onClick={() => setConversationToDelete(null)} className="flex-1 py-2 bg-panel-2 hover:bg-line text-sand text-[13px] font-medium rounded-xl transition-colors cursor-pointer">Cancel</button>
               <button type="button" onClick={confirmDeleteConversation} className="flex-1 py-2 bg-rust hover:bg-rust/85 text-white text-[13px] font-medium rounded-xl transition-colors cursor-pointer">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workspaceToLeave && (
+        <div className="fixed inset-0 modal-scrim z-[200] flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-panel border border-line-2 p-5 rounded-2xl shadow-2xl relative animate-fadeInScale">
+            <button type="button" onClick={() => { setWorkspaceToLeave(null); setLeaveError(null); }} className="absolute right-3 top-3 text-faint hover:text-cream cursor-pointer"><X size={15} /></button>
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-xl bg-rust/10 text-rust flex items-center justify-center border border-rust/20 shrink-0"><LogOut size={16} /></div>
+              <h3 className="font-semibold text-cream text-sm">Leave Workspace?</h3>
+            </div>
+            <p className="text-[13px] text-sand leading-relaxed mb-4">Leave <span className="text-cream font-medium">"{activeWorkspace?.name}"</span>? You will lose access to its rooms and history until you are invited again.</p>
+            {leaveError && (
+              <p className="text-[13px] text-rust bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2 mb-3">{leaveError}</p>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => { setWorkspaceToLeave(null); setLeaveError(null); }} className="flex-1 py-2 bg-panel-2 hover:bg-line text-sand text-[13px] font-medium rounded-xl transition-colors cursor-pointer">Cancel</button>
+              <button type="button" onClick={confirmLeaveWorkspace} className="flex-1 py-2 bg-rust hover:bg-rust/85 text-white text-[13px] font-medium rounded-xl transition-colors cursor-pointer">Leave</button>
             </div>
           </div>
         </div>

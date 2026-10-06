@@ -30,6 +30,15 @@ export default function WorkspaceHub() {
   const [busyInvite, setBusyInvite] = useState<string | null>(null);
   const [inviteNote, setInviteNote] = useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null);
 
+  // Leaving a workspace you own needs a successor, so the owner flow is a
+  // two-step: this holds the workspace being left while they pick one.
+  const [leaving, setLeaving] = useState<{ wsId: string; candidates: { id: string; name: string; email: string; avatar: string }[] } | null>(null);
+  const [pickedSuccessor, setPickedSuccessor] = useState<string | null>(null);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [isLeaving, setIsLeaving] = useState(false);
+
+  const { leaveWorkspace } = useStore();
+
   // Load the directory on mount without auto-entering a workspace.
   useEffect(() => {
     fetchWorkspaces({ autoEnter: false });
@@ -84,6 +93,41 @@ export default function WorkspaceHub() {
     // Stay on the hub so the new room is visible in the list; the user
     // chooses when to enter it.
     setTab('enter');
+  };
+
+  // Leaving is the member's exit; an owner must first hand the room to one of
+  // its other members. The backend tells us which case applies and who can take
+  // over, so this stays a single confirm-then-go interaction.
+  const handleLeave = async (wsId: string) => {
+    setLeaveError(null);
+    setIsLeaving(true);
+    const result = await leaveWorkspace(wsId, pickedSuccessor || undefined);
+    setIsLeaving(false);
+
+    if (result.success) {
+      setLeaving(null);
+      setPickedSuccessor(null);
+      return;
+    }
+
+    if (result.soleOwner) {
+      // Nobody to hand the room to: leaving would orphan it. Tell the owner
+      // plainly rather than silently blocking the button.
+      setLeaveError(result.error);
+      return;
+    }
+
+    if (result.requiresTransfer) {
+      // First refusal from the backend: it wants a successor. Stage the
+      // candidates and let the user pick before trying again.
+      const ws = workspaces.find((w) => w.id === wsId);
+      setLeaving({ wsId, candidates: result.candidates });
+      setPickedSuccessor(result.candidates[0]?.id ?? null);
+      setLeaveError(null);
+      return;
+    }
+
+    setLeaveError(result.error);
   };
 
   const firstName = (user?.name || 'there').split(' ')[0];
@@ -383,13 +427,52 @@ export default function WorkspaceHub() {
                           {members} {members === 1 ? 'person' : 'people'}
                         </span>
 
-                        <button
-                          onClick={() => handleEnter(ws)}
-                          className="px-3 py-1.5 rounded-xl bg-ember hover:bg-ember-2 text-on-ember text-[13px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-lg shadow-ember/20 btn-3d"
-                        >
-                          Enter
-                          <ArrowRight size={11} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {isOwner && members > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLeaving({ wsId: ws.id, candidates: [] });
+                                setPickedSuccessor(null);
+                                setLeaveError(null);
+                                // Ask the backend who can take over; it returns
+                                // the eligible members for the transfer dialog.
+                                leaveWorkspace(ws.id).then((r) => {
+                                  if (r.requiresTransfer) {
+                                    setLeaving({ wsId: ws.id, candidates: r.candidates });
+                                    setPickedSuccessor(r.candidates[0]?.id ?? null);
+                                  } else if (!r.success) {
+                                    setLeaveError(r.error);
+                                    setLeaving(null);
+                                  } else {
+                                    setLeaving(null);
+                                  }
+                                });
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl text-[13px] font-semibold text-sand hover:text-rust border border-line hover:border-rust/40 transition-all cursor-pointer flex items-center gap-1"
+                              title="Leave this workspace (transfers ownership first)"
+                            >
+                              Leave
+                            </button>
+                          )}
+                          {!isOwner && (
+                            <button
+                              type="button"
+                              onClick={() => setLeaving({ wsId: ws.id, candidates: [] })}
+                              className="px-2.5 py-1.5 rounded-xl text-[13px] font-semibold text-sand hover:text-rust border border-line hover:border-rust/40 transition-all cursor-pointer flex items-center gap-1"
+                              title="Leave this workspace"
+                            >
+                              Leave
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleEnter(ws)}
+                            className="px-3 py-1.5 rounded-xl bg-ember hover:bg-ember-2 text-on-ember text-[13px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-lg shadow-ember/20 btn-3d"
+                          >
+                            Enter
+                            <ArrowRight size={11} />
+                          </button>
+                        </div>
                       </div>
                     </article>
                   );
@@ -468,6 +551,89 @@ export default function WorkspaceHub() {
           </section>
         )}
       </div>
+
+      {/* -- Leave / transfer dialog -------------------------------------- */}
+      {leaving && (
+        <div className="fixed inset-0 modal-scrim z-[200] flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-panel border border-line-2 p-5 rounded-2xl shadow-2xl relative animate-fadeInScale">
+            <button
+              type="button"
+              onClick={() => { setLeaving(null); setPickedSuccessor(null); setLeaveError(null); }}
+              className="absolute right-3 top-3 text-faint hover:text-cream cursor-pointer"
+            >
+              <X size={15} />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-xl bg-rust/10 text-rust flex items-center justify-center border border-rust/20 shrink-0">
+                <LogOut size={16} />
+              </div>
+              <h3 className="font-semibold text-cream text-sm">Leave workspace?</h3>
+            </div>
+
+            {leaving.candidates.length === 0 ? (
+              <p className="text-[13px] text-sand leading-relaxed mb-4">
+                Leave <span className="text-cream font-medium">"{workspaces.find((w) => w.id === leaving.wsId)?.name}"</span>?
+                You will lose access to its rooms and history.
+              </p>
+            ) : (
+              <>
+                <p className="text-[13px] text-sand leading-relaxed mb-3">
+                  You own <span className="text-cream font-medium">"{workspaces.find((w) => w.id === leaving.wsId)?.name}"</span>.
+                  Pick a collaborator to take over ownership before you leave.
+                </p>
+                <div className="space-y-1.5 mb-4 max-h-52 overflow-y-auto">
+                  {leaving.candidates.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setPickedSuccessor(c.id)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
+                        pickedSuccessor === c.id
+                          ? 'bg-ember/10 border-ember/40'
+                          : 'bg-panel-2/50 border-line/60 hover:border-line-2'
+                      }`}
+                    >
+                      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-ember to-ember-2 text-on-ember font-bold flex items-center justify-center text-[12px] shrink-0">
+                        {c.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-semibold text-cream truncate">{c.name}</p>
+                        <p className="text-[12px] text-faint truncate">{c.email}</p>
+                      </div>
+                      {pickedSuccessor === c.id && <Check size={14} className="text-ember shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {leaveError && (
+              <p className="text-[13px] text-rust bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2 mb-3">
+                {leaveError}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setLeaving(null); setPickedSuccessor(null); setLeaveError(null); }}
+                className="flex-1 py-2 bg-panel-2 hover:bg-line text-sand text-[13px] font-medium rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isLeaving || (leaving.candidates.length > 0 && !pickedSuccessor)}
+                onClick={() => handleLeave(leaving.wsId)}
+                className="flex-1 py-2 bg-rust hover:bg-rust/85 text-white text-[13px] font-medium rounded-xl transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLeaving ? 'Leaving…' : 'Leave'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -357,6 +357,81 @@ router.post('/invitations/:id/reject', requireVerifiedAuth, async (req: Authenti
   }
 });
 
+// Leave workspace
+// A member can walk away at will. The owner cannot: the room would be
+// orphaned with nobody able to administer it, so they must hand ownership to
+// an existing member first — or delete the workspace if they are alone.
+router.post('/workspaces/:id/leave', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ws = await db.getWorkspaceById(req.params.id);
+    if (!ws) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+
+    const leavingUserId = req.user!.id;
+
+    // Leaving is a membership action; an admin who is not a member has nothing
+    // to leave here.
+    if (ws.ownerId !== leavingUserId && !(ws.memberIds || []).includes(leavingUserId)) {
+      return res.status(403).json({ error: 'You are not a member of this workspace' });
+    }
+
+    // Owner: must transfer first. Name the eligible successors so the client
+    // can offer the choice rather than making the user type a user id.
+    if (ws.ownerId === leavingUserId) {
+      const successors = (ws.memberIds || []).filter((id) => id !== leavingUserId);
+      if (successors.length === 0) {
+        return res.status(409).json({
+          error: 'You are the only member and the owner. Transfer ownership to a collaborator first, or delete the workspace to leave it.',
+          soleOwner: true,
+        });
+      }
+
+      const newOwnerId = req.body?.newOwnerId;
+      if (!newOwnerId || !successors.includes(newOwnerId)) {
+        // List the candidates with enough detail for the UI to render them.
+        const candidates = await db.getUsersByIds(successors);
+        return res.status(409).json({
+          error: 'You own this workspace. Choose a collaborator to take over ownership before you leave.',
+          requiresTransfer: true,
+          candidates: candidates.map((c) => ({ id: c.id, name: c.name, email: c.email, avatar: c.avatar })),
+        });
+      }
+
+      ws.ownerId = newOwnerId;
+    }
+
+    // Remove the departing user from the membership roster.
+    ws.memberIds = (ws.memberIds || []).filter((id) => id !== leavingUserId);
+    await db.updateWorkspace(ws.id, { memberIds: ws.memberIds, ownerId: ws.ownerId });
+
+    await db.logAudit(
+      leavingUserId,
+      req.user!.name,
+      req.user!.email,
+      'WORKSPACE_LEFT',
+      `Left workspace: "${ws.name}"${ws.ownerId === leavingUserId ? '' : ` (ownership transferred)`}`,
+      ws.id,
+      req.ip
+    );
+
+    const io = getIo();
+    if (io) {
+      const roomName = `workspace:${ws.id}`;
+      io.to(roomName).emit('workspace-member-left', {
+        workspaceId: ws.id,
+        userId: leavingUserId,
+      });
+      // The roster changed, so everyone's member list and the hub counts need it.
+      io.emit('workspace-updated-global', ws);
+    }
+
+    return res.status(200).json({ message: 'You have left the workspace.', workspace: ws });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Could not leave the workspace' });
+  }
+});
+
 // Delete workspace
 router.delete('/workspaces/:id', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {

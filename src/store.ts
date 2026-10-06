@@ -123,6 +123,13 @@ export interface AppState {
   fetchWorkspaces: (options?: { autoEnter?: boolean }) => Promise<void>;
   createWorkspace: (name: string, description: string) => Promise<Workspace | null>;
   deleteWorkspace: (id: string) => Promise<void>;
+  leaveWorkspace: (id: string, newOwnerId?: string) => Promise<{
+    success: boolean;
+    error: string;
+    requiresTransfer: boolean;
+    soleOwner: boolean;
+    candidates: { id: string; name: string; email: string; avatar: string }[];
+  }>;
   setActiveWorkspace: (ws: Workspace) => void;
 
   // Invitation Actions
@@ -439,6 +446,21 @@ export const useStore = create<AppState>((set, get) => {
         const updatedMembers = [...(activeWs.memberIds || []), data.user.id];
         useWorkspaceStore.setState({
           activeWorkspace: { ...activeWs, memberIds: updatedMembers }
+        });
+      }
+      get().fetchWorkspaces();
+    });
+
+    // A departing member leaves the roster. The hub re-fetches its directory so
+    // member counts and access reflect the departure without a reload.
+    socket.on('workspace-member-left', (data: { workspaceId: string; userId: string }) => {
+      const activeWs = useWorkspaceStore.getState().activeWorkspace;
+      if (activeWs && activeWs.id === data.workspaceId) {
+        useWorkspaceStore.setState({
+          activeWorkspace: {
+            ...activeWs,
+            memberIds: (activeWs.memberIds || []).filter((id) => id !== data.userId),
+          },
         });
       }
       get().fetchWorkspaces();
@@ -1169,6 +1191,56 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
+    leaveWorkspace: async (id, newOwnerId) => {
+      try {
+        const res = await secureFetch(`${API_BASE}/workspaces/${id}/leave`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newOwnerId ? { newOwnerId } : {}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return {
+            success: false,
+            // The backend distinguishes "you own this, pick a successor" from
+            // "you are alone" so the UI can present the right next step
+            // instead of a bare error string.
+            error: data.error || 'Could not leave the workspace',
+            requiresTransfer: !!data.requiresTransfer,
+            soleOwner: !!data.soleOwner,
+            candidates: data.candidates || [],
+          };
+        }
+
+        const spaces = useWorkspaceStore.getState().workspaces.filter((w) => w.id !== id);
+        let nextActive = useWorkspaceStore.getState().activeWorkspace;
+        if (nextActive?.id === id) {
+          nextActive = spaces.length > 0 ? spaces[0] : null;
+        }
+        useWorkspaceStore.setState({ workspaces: spaces, activeWorkspace: nextActive });
+
+        if (nextActive) {
+          get().setActiveWorkspace(nextActive);
+        } else {
+          // Nothing left to enter: clear the room-scoped chat state so a stale
+          // conversation can't linger after the user's last workspace is gone.
+          useChatStore.setState({ activeConversation: null, conversations: [], messages: [] });
+          get().navigateTo('/workspaces');
+        }
+
+        return { success: true, error: '', requiresTransfer: false, soleOwner: false, candidates: [] };
+      } catch (e) {
+        console.error(e);
+        return {
+          success: false,
+          error: 'Network error. Try again.',
+          requiresTransfer: false,
+          soleOwner: false,
+          candidates: [],
+        };
+      }
+    },
+
     setActiveWorkspace: (ws) => {
       useWorkspaceStore.setState({ activeWorkspace: ws });
       useChatStore.setState({ activeConversation: null, messages: [], collaborativePromptText: '' });
@@ -1181,7 +1253,6 @@ export const useStore = create<AppState>((set, get) => {
         setupSocket(user, ws.id);
       }
     },
-
     fetchPendingInvitations: async () => {
       try {
         const res = await secureFetch(`${API_BASE}/invitations/pending`);
