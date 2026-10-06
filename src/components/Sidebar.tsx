@@ -288,7 +288,7 @@ export default function Sidebar() {
           className={`w-full flex items-center gap-2.5 ${labels ? 'px-3' : 'px-0 justify-center'} py-2 font-medium text-[13px] rounded-xl bg-gradient-to-r from-ember to-ember-2 text-white cursor-pointer transition-all btn-3d shadow-lg shadow-ember/20`} title="Invite">
           <Users size={13} className="shrink-0" />{labels && <span>Invite</span>}
         </button>
-        {activeWorkspace && (
+        {activeWorkspace && (activeWorkspace.memberIds || []).includes(user?.id) && (
           <button type="button" onClick={handleLeaveClick}
             className={`w-full flex items-center gap-2.5 ${labels ? 'px-3' : 'px-0 justify-center'} py-2 font-medium text-[13px] rounded-xl border bg-panel-2/50 border-line/60 text-sand hover:text-rust hover:border-rust/40 cursor-pointer transition-all`} title="Leave workspace">
             <LogOut size={13} className="shrink-0" />{labels && <span>Leave workspace</span>}

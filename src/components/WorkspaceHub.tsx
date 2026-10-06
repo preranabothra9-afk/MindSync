@@ -392,6 +392,11 @@ export default function WorkspaceHub() {
                   const members = ws.memberIds?.length || 0;
                   const isOwner = ws.ownerId === user?.id;
                   const isCurrent = activeWorkspace?.id === ws.id;
+                  // Leaving is only meaningful if you are actually in the room.
+                  // An admin sees every workspace regardless of membership, so
+                  // gating on memberIds keeps a "Leave" button from appearing on
+                  // a room the admin already left — where it could only error.
+                  const isMember = (ws.memberIds || []).includes(user?.id);
 
                   return (
                     <article
@@ -428,7 +433,7 @@ export default function WorkspaceHub() {
                         </span>
 
                         <div className="flex items-center gap-2">
-                          {isOwner && members > 1 && (
+                          {isMember && isOwner && members > 1 && (
                             <button
                               type="button"
                               onClick={() => {
@@ -455,7 +460,7 @@ export default function WorkspaceHub() {
                               Leave
                             </button>
                           )}
-                          {!isOwner && (
+                          {!isOwner && isMember && (
                             <button
                               type="button"
                               onClick={() => setLeaving({ wsId: ws.id, candidates: [] })}
