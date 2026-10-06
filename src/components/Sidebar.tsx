@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../store';
+import { PresenceUser } from '../types';
 import {
   ChevronDown, Trash2, Users, BookmarkCheck, Shield, LogOut, AlertTriangle, X,
   FolderPlus, Hash, Plus, PanelLeftClose, Menu, Building2, Home
@@ -24,6 +25,7 @@ export default function Sidebar() {
   const createConversation = useStore((s) => s.createConversation);
   const deleteConversation = useStore((s) => s.deleteConversation);
   const presence = useStore((s) => s.presence);
+  const workspaceMembers = useStore((s) => s.workspaceMembers);
   const socketConnected = useStore((s) => s.socketConnected);
   const isSidebarOpen = useStore((s) => s.isSidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
@@ -47,6 +49,35 @@ export default function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [workspaceToLeave, setWorkspaceToLeave] = useState<string | null>(null);
   const [leaveError, setLeaveError] = useState<string | null>(null);
+
+  // Presence only knows about live sockets, so merge it onto the full member
+  // roster — otherwise people would drop out of the list the moment they went
+  // offline. Online members sort first; the roster's own order is preserved
+  // within each group so the owner stays where the member list put them.
+  const roster = (() => {
+    const byId = new Map(workspaceMembers.map((m) => [m.id, m]));
+    const live = new Map<string, PresenceUser>();
+    for (const p of presence) {
+      if (!live.has(p.userId)) live.set(p.userId, p);
+    }
+    // A presence row with no roster entry (a member list still loading, or a
+    // stale one) is still someone in the room — keep them visible.
+    for (const p of live.values()) {
+      if (!byId.has(p.userId)) byId.set(p.userId, { id: p.userId, name: p.userName });
+    }
+    return Array.from(byId.values())
+      .map((m) => {
+        const p = live.get(m.id);
+        return {
+          id: m.id,
+          name: m.name,
+          avatar: p?.avatar || m.name.charAt(0).toUpperCase(),
+          online: !!p,
+          activity: p?.activity,
+        };
+      })
+      .sort((a, b) => (a.online === b.online ? 0 : a.online ? -1 : 1));
+  })();
 
   const handleCreateWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -232,32 +263,32 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* Presence */}
+      {/* Members — everyone in the room, each with a live or offline status */}
       <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-4">
-        {labels && <p className="px-1 pb-2 text-[13px] font-mono font-bold uppercase tracking-widest text-faint">Active Now</p>}
+        {labels && <p className="px-1 pb-2 text-[13px] font-mono font-bold uppercase tracking-widest text-faint">Members</p>}
         <div className={labels ? 'space-y-0.5' : 'space-y-1 flex flex-col items-center'}>
-          {presence.length === 0 && labels && <p className="text-[14px] text-faint italic px-2 py-1.5">No collaborators online.</p>}
-          {presence.map((p) => {
-            const isMe = p.userId === user?.id;
-            const hasActivity = !!p.activity;
+          {roster.length === 0 && labels && <p className="text-[14px] text-faint italic px-2 py-1.5">No members yet.</p>}
+          {roster.map((member) => {
+            const isMe = member.id === user?.id;
+            const statusText = member.activity || (member.online ? 'Online' : 'Offline');
             return (
-              <div key={p.userId} className="group relative cursor-help z-0 hover:z-10" title={`${p.userName} ${isMe ? '(You)' : ''} ${hasActivity ? `- ${p.activity}` : ''}`}>
+              <div key={member.id} className="group relative cursor-help z-0 hover:z-10" title={`${member.name} ${isMe ? '(You)' : ''} - ${statusText}`}>
                 <div className={`flex items-center gap-2.5 ${labels ? 'px-3 py-1.5' : 'py-0.5 justify-center'} rounded-xl transition-all hover:bg-panel-2/60`}>
                   <div className="relative shrink-0">
-                    <div className={`w-7 h-7 rounded-full text-[13px] font-bold flex items-center justify-center border-2 transition-all ${isMe ? 'bg-gradient-to-br from-ember to-ember-2 text-white border-ember/30' : 'bg-panel-2 text-sand border-line-2'}`}>{p.avatar}</div>
-                    <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 border-2 border-panel rounded-full ${hasActivity ? 'bg-ember-soft animate-pulse' : 'bg-leaf'}`} />
+                    <div className={`w-7 h-7 rounded-full text-[13px] font-bold flex items-center justify-center border-2 transition-all ${isMe ? 'bg-gradient-to-br from-ember to-ember-2 text-white border-ember/30' : member.online ? 'bg-panel-2 text-sand border-line-2' : 'bg-panel-2 text-faint border-line/40'}`}>{member.avatar}</div>
+                    <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 border-2 border-panel rounded-full ${member.activity ? 'bg-ember-soft animate-pulse' : member.online ? 'bg-leaf' : 'bg-faint'}`} />
                   </div>
                   {labels && (
                     <div className="min-w-0 leading-tight">
-                      <p className="text-[14px] text-cream truncate font-medium">{p.userName} {isMe && <span className="text-faint text-[13px]">(You)</span>}</p>
-                      <p className="text-[13px] text-faint truncate">{hasActivity ? p.activity : 'Online'}</p>
+                      <p className={`text-[14px] truncate font-medium ${member.online ? 'text-cream' : 'text-sand'}`}>{member.name} {isMe && <span className="text-faint text-[13px]">(You)</span>}</p>
+                      <p className="text-[13px] text-faint truncate">{statusText}</p>
                     </div>
                   )}
                 </div>
                 {!labels && (
                   <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 hidden group-hover:block bg-panel border border-line-2 px-2.5 py-1.5 rounded-lg text-[13px] text-cream whitespace-nowrap shadow-2xl z-[99]">
-                    <p className="font-semibold">{p.userName} {isMe && '(You)'}</p>
-                    <p className="text-faint">{hasActivity ? p.activity : 'Online'}</p>
+                    <p className="font-semibold">{member.name} {isMe && '(You)'}</p>
+                    <p className="text-faint">{statusText}</p>
                   </div>
                 )}
               </div>

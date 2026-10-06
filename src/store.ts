@@ -522,6 +522,9 @@ export const useStore = create<AppState>((set, get) => {
         useWorkspaceStore.setState({
           activeWorkspace: { ...activeWs, memberIds: updatedMembers }
         });
+        // The sidebar's member roster shows names, not just ids, so it needs its
+        // own fetch to pick up the newcomer.
+        get().fetchWorkspaceMembers(data.workspaceId);
       }
       get().fetchWorkspaces();
     });
@@ -537,6 +540,8 @@ export const useStore = create<AppState>((set, get) => {
             memberIds: (activeWs.memberIds || []).filter((id) => id !== data.userId),
           },
         });
+        // Drop the departed name from the sidebar roster too.
+        get().fetchWorkspaceMembers(data.workspaceId);
       }
       get().fetchWorkspaces();
     });
