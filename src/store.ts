@@ -323,6 +323,76 @@ export async function secureFetch(url: string, options: RequestInit = {}): Promi
   return response;
 }
 
+// ── Stream watchdog ───────────────────────────────────────────────────────
+// Streaming is append-only on the wire: the client stitches tokens together as
+// they arrive and only the terminal event carries the authoritative full text.
+// If the socket drops inside that window the terminal event is lost with it, and
+// the card freezes mid-sentence forever — the finished text is sitting in the
+// database, but nothing re-delivers it, so the only recovery used to be a manual
+// page refresh. The watchdog notices a stream that has gone quiet and re-reads
+// just those cards from the server, performing that refresh invisibly.
+const streamHeartbeats = new Map<string, number>();
+let streamWatchdog: ReturnType<typeof setInterval> | undefined;
+const STREAM_STALL_MS = 20_000;
+
+const reconcileStalledStreams = async () => {
+  const messages = useChatStore.getState().messages;
+  if (!messages.length) return;
+
+  // Collect the messages still marked streaming that have not produced a chunk
+  // in a while, grouped by the one conversation we need to fetch per message.
+  const stalled: Record<string, string[]> = {};
+  const now = Date.now();
+  for (const m of messages) {
+    for (const [modelKey, resp] of Object.entries(m.modelResponses || {})) {
+      if (resp.status !== 'streaming') continue;
+      const lastSeen = streamHeartbeats.get(`${m.id}:${modelKey}`) ?? 0;
+      if (lastSeen && now - lastSeen < STREAM_STALL_MS) continue;
+      (stalled[m.conversationId] ||= []).push(m.id);
+      break;
+    }
+  }
+
+  await Promise.all(Object.keys(stalled).map(async (conversationId) => {
+    try {
+      const res = await secureFetch(`${API_BASE}/messages/${conversationId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const serverMessages: Message[] = data.messages ?? [];
+
+      useChatStore.setState((state) => ({
+        messages: state.messages.map((local) => {
+          if (!stalled[conversationId].includes(local.id)) return local;
+          const server = serverMessages.find((sm) => sm.id === local.id);
+          if (!server) return local;
+
+          let changed = false;
+          const merged = { ...local.modelResponses };
+          for (const [modelKey, localResp] of Object.entries(merged)) {
+            if (localResp.status !== 'streaming') continue;
+            const key = `${local.id}:${modelKey}`;
+            const serverResp = server.modelResponses?.[modelKey];
+            // Only a terminal server state is authoritative. While the server
+            // is still streaming its stored content is empty, and overwriting
+            // would erase the partial text the user is already reading — so
+            // just reset the quiet window and let the live chunks keep coming.
+            if (!serverResp || serverResp.status === 'streaming') {
+              streamHeartbeats.set(key, Date.now());
+              continue;
+            }
+            merged[modelKey] = { ...serverResp };
+            streamHeartbeats.delete(key);
+            changed = true;
+          }
+          return changed ? { ...local, modelResponses: merged } : local;
+        })
+      }));
+    } catch (err) {
+      console.warn('Stream reconciliation failed:', err);
+    }
+  }));
+};
+
 export const useStore = create<AppState>((set, get) => {
   
   const setupSocket = (user: User, workspaceId: string) => {
@@ -348,7 +418,12 @@ export const useStore = create<AppState>((set, get) => {
       // reconnect budget back for the next transient blip.
       authRetries = 0;
       console.log('Synchronized securely with real-time sockets.');
-      
+
+      // A stream that was live when the socket dropped may have finished on the
+      // server while we were away, losing its terminal event in the gap. Re-read
+      // any card still spinning locally before it is left frozen mid-sentence.
+      reconcileStalledStreams();
+
       socket.emit('join-workspace', {
         workspaceId,
         userId: user.id,
@@ -532,6 +607,9 @@ export const useStore = create<AppState>((set, get) => {
 
     // Handle traditional and modern standardized real-time stream events
     socket.on('model-status-update', (data: { messageId: string; modelKey: string; status: 'streaming' }) => {
+      // A stream's quiet window starts when it starts, so a slow first token
+      // is never mistaken for a dead connection.
+      streamHeartbeats.set(`${data.messageId}:${data.modelKey}`, Date.now());
       useChatStore.setState({
         messages: useChatStore.getState().messages.map(m => {
           if (m.id === data.messageId && m.modelResponses[data.modelKey]) {
@@ -555,6 +633,7 @@ export const useStore = create<AppState>((set, get) => {
     });
 
     socket.on('model-stream-chunk', (data: { messageId: string; modelKey: string; chunk: string }) => {
+      streamHeartbeats.set(`${data.messageId}:${data.modelKey}`, Date.now());
       useChatStore.setState({
         messages: useChatStore.getState().messages.map(m => {
           if (m.id === data.messageId && m.modelResponses[data.modelKey]) {
@@ -580,6 +659,7 @@ export const useStore = create<AppState>((set, get) => {
     });
 
     socket.on('model-stream-complete', (data: { messageId: string; modelKey: string; content: string; durationMs: number }) => {
+      streamHeartbeats.delete(`${data.messageId}:${data.modelKey}`);
       useChatStore.setState({
         messages: useChatStore.getState().messages.map(m => {
           if (m.id === data.messageId && m.modelResponses[data.modelKey]) {
@@ -602,6 +682,7 @@ export const useStore = create<AppState>((set, get) => {
     });
 
     socket.on('model-stream-stopped', (data: { messageId: string; modelKey: string; content: string; durationMs: number }) => {
+      streamHeartbeats.delete(`${data.messageId}:${data.modelKey}`);
       useChatStore.setState({
         messages: useChatStore.getState().messages.map(m => {
           if (m.id === data.messageId && m.modelResponses[data.modelKey]) {
@@ -624,6 +705,7 @@ export const useStore = create<AppState>((set, get) => {
     });
 
     socket.on('model-stream-failed', (data: { messageId: string; modelKey: string; error: string }) => {
+      streamHeartbeats.delete(`${data.messageId}:${data.modelKey}`);
       useChatStore.setState({
         messages: useChatStore.getState().messages.map(m => {
           if (m.id === data.messageId && m.modelResponses[data.modelKey]) {
@@ -838,6 +920,13 @@ export const useStore = create<AppState>((set, get) => {
     });
 
     useSocketStore.setState({ socket });
+
+    // Poll for streams that went quiet — a dropped socket can take the terminal
+    // event with it, and this is what turns "stuck forever, refresh to see it"
+    // into recovering on its own. Any prior watchdog belongs to a superseded
+    // socket and is replaced here.
+    clearInterval(streamWatchdog);
+    streamWatchdog = setInterval(reconcileStalledStreams, 8_000);
   };
 
   return {
@@ -1021,6 +1110,11 @@ export const useStore = create<AppState>((set, get) => {
       if (socket) {
         socket.disconnect();
       }
+      // No socket means nothing left to reconcile — stop the watchdog so it is
+      // not firing against an empty message list in the background.
+      clearInterval(streamWatchdog);
+      streamWatchdog = undefined;
+      streamHeartbeats.clear();
 
       useAuthStore.setState({ user: null, token: null });
       useWorkspaceStore.setState({ workspaces: [], activeWorkspace: null });
