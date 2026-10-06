@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireVerifiedAuth, requireRole, adminOnly, AuthenticatedRequest, generateUUID } from './auth';
-import { db, UserModel, WorkspaceModel, MessageModel, ConversationModel, SavedResponseModel, AuditLogModel } from './database';
-import { Workspace, Conversation, SavedResponse, User, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, Evidence, Decision, DecisionGateResult, DecisionSummary, WorkspaceMember } from '../src/types';
+import { db, UserModel, WorkspaceModel, MessageModel, ConversationModel, SavedResponseModel, AuditLogModel, InvitationModel } from './database';
+import { Workspace, Conversation, SavedResponse, User, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, Evidence, Decision, DecisionGateResult, DecisionSummary, WorkspaceMember, Invitation } from '../src/types';
 import { createWorkspaceSchema, createChannelSchema, inviteUserSchema, submitPromptSchema, attachEvidenceSchema } from './validators';
 import { getIo } from './socket';
 import { AI_MODELS, isModelConfigured, DEFAULT_COMPARISON_MODELS, getGeminiTextResponseOrNull } from './ai';
@@ -9,6 +9,11 @@ import { generateAiReference } from './evidence';
 import { evaluateDecisionGate, buildDecisionReplay, buildDecisionSummary, buildSummaryNarrationPrompt } from './decisions';
 
 const router = Router();
+
+// After this many declines the owner can no longer invite that address to
+// that workspace. A per-workspace ceiling, not a global one — rejecting the
+// "Design Review" room five times says nothing about the "Q3 Planning" room.
+const MAX_INVITATION_REJECTIONS = 5;
 
 // --- AUTH ROUTER ---
 import { handleRegister, handleLogin, handleLogout, verifyCurrentUser, handleRefresh, handleForgotPassword, handleResetPassword, handleVerifyEmail, handleCheckVerification, handleResendVerification } from './auth';
@@ -184,8 +189,29 @@ router.post('/workspaces/:id/invite', requireVerifiedAuth, async (req: Authentic
       return res.status(400).json({ error: 'Selected user is already a member of this workspace' });
     }
 
-    ws.memberIds.push(invitee.id);
-    await db.updateWorkspace(ws.id, { memberIds: ws.memberIds });
+    // A collaborator must opt in. Past this point the invite is recorded as
+    // pending and the recipient decides from their own workspace hub — they are
+    // NOT added to the workspace until they accept.
+    const rejections = await db.countRejections(ws.id, invitee.id);
+    if (rejections >= MAX_INVITATION_REJECTIONS) {
+      return res.status(403).json({
+        error: `${invitee.email} has declined ${MAX_INVITATION_REJECTIONS} invitations to this workspace and can no longer be added.`
+      });
+    }
+    if (await db.hasPendingInvitation(ws.id, invitee.id)) {
+      return res.status(409).json({ error: `${invitee.email} already has a pending invitation to this workspace.` });
+    }
+
+    const invitation = await db.createInvitation({
+      workspaceId: ws.id,
+      workspaceName: ws.name,
+      inviterId: req.user!.id,
+      inviterName: req.user!.name,
+      inviteeId: invitee.id,
+      inviteeEmail: invitee.email,
+      status: 'pending',
+    });
+
     await db.logAudit(req.user!.id, req.user!.name, req.user!.email, 'INVITE_COLLABORATOR', `Invited user "${invitee.name}" (${invitee.email}) to workspace: "${ws.name}"`, ws.id, req.ip);
 
     // Broadcast realtime event
@@ -193,21 +219,20 @@ router.post('/workspaces/:id/invite', requireVerifiedAuth, async (req: Authentic
     if (io) {
       const roomName = `workspace:${ws.id}`;
       // Notify current workspace room and invitee specifically if connected
-      io.to(roomName).emit('workspace-member-added', {
+      io.to(roomName).emit('workspace-invite-sent', {
         workspaceId: ws.id,
-        user: {
-          id: invitee.id,
-          name: invitee.name,
-          email: invitee.email,
-          avatar: invitee.avatar,
-        }
+        inviteeId: invitee.id,
       });
+      // Hand the invitation to the invitee's own socket so their hub can offer
+      // the accept/reject choice without a reload.
+      io.to(`user:${invitee.id}`).emit('invitation-received', invitation);
       // Emit globallly so workspace list updates in real time for invited user
       io.emit('workspace-updated-global', ws);
     }
 
-    return res.status(200).json({
-      message: 'User successfully added to workspace',
+    return res.status(201).json({
+      message: 'Invitation sent. They can join once they accept it.',
+      invitation,
       member: {
         id: invitee.id,
         name: invitee.name,
@@ -219,6 +244,116 @@ router.post('/workspaces/:id/invite', requireVerifiedAuth, async (req: Authentic
   } catch (err: any) {
     console.error('Invite member error:', err);
     return res.status(500).json({ error: 'Failed to complete user invitation sequence.' });
+  }
+});
+
+// --- INVITATION ROUTER ---
+// An invitation is a request the recipient answers. Membership only begins on
+// accept, so a pending invite grants no workspace access at all.
+
+// Pending invitations addressed to the calling user, newest last.
+router.get('/invitations/pending', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const invitations = await db.getPendingInvitationsForUser(req.user!.id);
+    return res.status(200).json({ invitations });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Could not load pending invitations' });
+  }
+});
+
+// Accept: membership begins here, and only here.
+router.post('/invitations/:id/accept', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const invitation = await db.getInvitationById(req.params.id);
+    if (!invitation) {
+      return res.status(404).json({ error: 'Invitation no longer exists.' });
+    }
+    // Only the person it was sent to may answer it; a pending invitation is
+    // not transferable and cannot be answered by whoever happens to hold the id.
+    if (invitation.inviteeId !== req.user!.id) {
+      return res.status(403).json({ error: 'This invitation was not sent to you.' });
+    }
+    if (invitation.status !== 'pending') {
+      return res.status(409).json({ error: `This invitation has already been ${invitation.status}.` });
+    }
+
+    const ws = await db.getWorkspaceById(invitation.workspaceId);
+    if (!ws) {
+      return res.status(404).json({ error: 'The workspace this invitation points to no longer exists.' });
+    }
+
+    await db.updateInvitationStatus(invitation.id, 'accepted');
+    // Guard the membership write against double-accept races (two rapid taps or
+    // a socket replay) so the id never lands in memberIds twice.
+    if (!(ws.memberIds || []).includes(req.user!.id)) {
+      ws.memberIds.push(req.user!.id);
+      await db.updateWorkspace(ws.id, { memberIds: ws.memberIds });
+    }
+
+    await db.logAudit(req.user!.id, req.user!.name, req.user!.email, 'INVITATION_ACCEPTED', `Accepted invitation to workspace: "${ws.name}"`, ws.id, req.ip);
+
+    const io = getIo();
+    if (io) {
+      io.to(`workspace:${ws.id}`).emit('workspace-member-added', {
+        workspaceId: ws.id,
+        user: {
+          id: req.user!.id,
+          name: req.user!.name,
+          email: req.user!.email,
+          avatar: req.user!.avatar,
+        }
+      });
+      io.emit('workspace-updated-global', ws);
+      io.to(`user:${req.user!.id}`).emit('invitation-updated', { invitationId: invitation.id, status: 'accepted' });
+    }
+
+    return res.status(200).json({ message: 'You have joined the workspace.', workspace: ws });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Could not accept the invitation.' });
+  }
+});
+
+// Reject: the invitation is closed, and the decline is counted.
+router.post('/invitations/:id/reject', requireVerifiedAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const invitation = await db.getInvitationById(req.params.id);
+    if (!invitation) {
+      return res.status(404).json({ error: 'Invitation no longer exists.' });
+    }
+    if (invitation.inviteeId !== req.user!.id) {
+      return res.status(403).json({ error: 'This invitation was not sent to you.' });
+    }
+    if (invitation.status !== 'pending') {
+      return res.status(409).json({ error: `This invitation has already been ${invitation.status}.` });
+    }
+
+    await db.updateInvitationStatus(invitation.id, 'rejected');
+
+    // Report the running tally so the UI can warn the owner before their next
+    // attempt, and so the invitee understands the consequence of declining.
+    const rejections = await db.countRejections(invitation.workspaceId, invitation.inviteeId);
+    const remaining = Math.max(0, MAX_INVITATION_REJECTIONS - rejections);
+
+    const ws = await db.getWorkspaceById(invitation.workspaceId);
+    await db.logAudit(req.user!.id, req.user!.name, req.user!.email, 'INVITATION_REJECTED', `Declined invitation to workspace: "${ws?.name || invitation.workspaceName}"`, invitation.workspaceId, req.ip);
+
+    const io = getIo();
+    if (io) {
+      io.to(`user:${req.user!.id}`).emit('invitation-updated', { invitationId: invitation.id, status: 'rejected' });
+      io.to(`workspace:${invitation.workspaceId}`).emit('workspace-invite-declined', {
+        workspaceId: invitation.workspaceId,
+        inviteeId: invitation.inviteeId,
+        remaining,
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Invitation declined.',
+      remaining,
+      blocked: remaining === 0,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Could not reject the invitation.' });
   }
 });
 

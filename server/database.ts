@@ -1,7 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import fs from 'fs';
 import path from 'path';
-import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionDiscussion, Evidence, Decision, DecisionHistoryEntry, TimelineEvent, TimelineEventKind } from '../src/types';
+import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionDiscussion, Evidence, Decision, DecisionHistoryEntry, TimelineEvent, TimelineEventKind, Invitation } from '../src/types';
 import { generateUUID } from './auth';
 import { historyActionToTimelineKind, historyActionLabel } from './decisions';
 
@@ -113,6 +113,25 @@ const WorkspaceSchema = new Schema({
   description: { type: String, default: 'Collaborative AI workspace sandbox.' },
   ownerId: { type: String, required: true, index: true },
   memberIds: { type: [String], default: [], index: true },
+  createdAt: { type: String, default: () => new Date().toISOString() }
+}, {
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Invitation Schema
+// Collaborators must opt in: an invite lands here as `pending` and the
+// recipient decides. Rejections are never deleted, so the running tally of
+// declined invites for a (workspace, invitee) pair is just a count of these.
+const InvitationSchema = new Schema({
+  _id: { type: String, default: generateUUID },
+  workspaceId: { type: String, required: true, index: true },
+  workspaceName: { type: String, required: true },
+  inviterId: { type: String, required: true },
+  inviterName: { type: String, required: true },
+  inviteeId: { type: String, required: true, index: true },
+  inviteeEmail: { type: String, required: true, index: true },
+  status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending', index: true },
   createdAt: { type: String, default: () => new Date().toISOString() }
 }, {
   toJSON: { virtuals: true },
@@ -392,6 +411,7 @@ export const DecisionModel = (mongoose.models.Decision || mongoose.model('Decisi
 export const EvidenceModel = (mongoose.models.Evidence || mongoose.model('Evidence', EvidenceSchema)) as any;
 export const AuditLogModel = (mongoose.models.AuditLog || mongoose.model('AuditLog', AuditLogSchema)) as any;
 export const TimelineEventModel = (mongoose.models.TimelineEvent || mongoose.model('TimelineEvent', TimelineEventSchema)) as any;
+export const InvitationModel = (mongoose.models.Invitation || mongoose.model('Invitation', InvitationSchema)) as any;
 
 // Sample/demo workspace seeding has been removed. It used to synthesise a
 // "General Workspace" owned by a system account whenever the database was
@@ -1762,6 +1782,37 @@ class MongoDatabaseAdapter {
   async deleteUser(id: string): Promise<boolean> {
     const res = await UserModel.deleteOne({ _id: id });
     return res.deletedCount > 0;
+  }
+
+  async createInvitation(input: Omit<Invitation, 'id' | 'createdAt'>): Promise<Invitation> {
+    const created = await InvitationModel.create(input);
+    return created.toObject();
+  }
+
+  async getInvitationById(id: string): Promise<Invitation | null> {
+    const doc = await InvitationModel.findById(id);
+    return doc ? doc.toObject() : null;
+  }
+
+  async getPendingInvitationsForUser(userId: string): Promise<Invitation[]> {
+    const docs = await InvitationModel.find({ inviteeId: userId, status: 'pending' }).sort({ createdAt: 1 });
+    return docs.map((d) => d.toObject());
+  }
+
+  /** How many times this address has already declined this workspace. */
+  async countRejections(workspaceId: string, inviteeId: string): Promise<number> {
+    const res = await InvitationModel.countDocuments({ workspaceId, inviteeId, status: 'rejected' });
+    return res;
+  }
+
+  async hasPendingInvitation(workspaceId: string, inviteeId: string): Promise<boolean> {
+    const res = await InvitationModel.countDocuments({ workspaceId, inviteeId, status: 'pending' });
+    return res > 0;
+  }
+
+  async updateInvitationStatus(id: string, status: 'accepted' | 'rejected'): Promise<Invitation | null> {
+    const doc = await InvitationModel.findByIdAndUpdate(id, { status }, { new: true });
+    return doc ? doc.toObject() : null;
   }
 }
 

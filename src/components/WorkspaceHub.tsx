@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import {
   LayoutGrid, Plus, LogOut, Users, ArrowRight, RefreshCw,
-  Sparkles, Search, Crown, FolderOpen, ShieldCheck, Home
+  Sparkles, Search, Crown, FolderOpen, ShieldCheck, Home,
+  Check, X, Loader2, Mail
 } from 'lucide-react';
 import ThemeSwitcher from './ThemeSwitcher';
 
@@ -11,7 +12,8 @@ type HubTab = 'enter' | 'create';
 export default function WorkspaceHub() {
   const {
     user, workspaces, activeWorkspace, setActiveWorkspace,
-    createWorkspace, fetchWorkspaces, logout, navigateTo
+    createWorkspace, fetchWorkspaces, logout, navigateTo,
+    pendingInvitations, fetchPendingInvitations, respondToInvitation
   } = useStore();
 
   const [tab, setTab] = useState<HubTab>('enter');
@@ -22,10 +24,17 @@ export default function WorkspaceHub() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // One decision in flight at a time, and the outcome message for the card the
+  // user just answered — success sits on the card, not a global toast, because
+  // it is specific to that invitation.
+  const [busyInvite, setBusyInvite] = useState<string | null>(null);
+  const [inviteNote, setInviteNote] = useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null);
+
   // Load the directory on mount without auto-entering a workspace.
   useEffect(() => {
     fetchWorkspaces({ autoEnter: false });
-  }, [fetchWorkspaces]);
+    fetchPendingInvitations();
+  }, [fetchWorkspaces, fetchPendingInvitations]);
 
   // `memberIds` includes the owner, so its length is the true headcount.
   const totalSeats = useMemo(
@@ -79,6 +88,29 @@ export default function WorkspaceHub() {
 
   const firstName = (user?.name || 'there').split(' ')[0];
   const isAdmin = user?.role === 'admin';
+
+  // Accepting joins the workspace immediately; rejecting closes the request and
+  // counts the decline toward the five-decline cap on that workspace.
+  const handleRespond = async (invitationId: string, response: 'accept' | 'reject') => {
+    if (busyInvite) return;
+    setBusyInvite(invitationId);
+    setInviteNote(null);
+    const result = await respondToInvitation(invitationId, response);
+    setBusyInvite(null);
+    if (result.success) {
+      setInviteNote({
+        id: invitationId,
+        kind: 'ok',
+        // A rejection reports how many declines remain so the consequence is
+        // visible before the next one is irreversible.
+        text: response === 'accept'
+          ? 'You have joined the workspace.'
+          : `Invitation declined.${result.blocked ? ' You can no longer be invited to this workspace.' : ` ${result.remaining ?? 0} decline${(result.remaining ?? 0) === 1 ? '' : 's'} left before this workspace stops inviting you.`}`,
+      });
+    } else {
+      setInviteNote({ id: invitationId, kind: 'err', text: result.message });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-ink text-cream font-sans relative overflow-hidden grain">
@@ -198,6 +230,79 @@ export default function WorkspaceHub() {
               <ArrowRight size={16} className="text-ember shrink-0 group-hover:translate-x-1 transition-transform" />
             </div>
           </button>
+        )}
+
+        {/* -- Pending invitations ---------------------------------------- */}
+        {/* Invitations land here as requests: the recipient decides, and the
+            workspace only appears in the directory below once they accept. */}
+        {pendingInvitations.length > 0 && (
+          <section className="mb-7">
+            <div className="flex items-center gap-2 mb-3">
+              <Mail size={14} className="text-ember" />
+              <h2 className="text-[13px] font-mono uppercase tracking-[0.18em] text-faint font-bold">
+                Pending invitations
+              </h2>
+              <span className="px-1.5 py-0.5 rounded-md font-mono text-[12px] font-bold bg-ember/10 text-ember border border-ember/20">
+                {pendingInvitations.length}
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {pendingInvitations.map((inv) => {
+                const isBusy = busyInvite === inv.id;
+                const note = inviteNote?.id === inv.id ? inviteNote : null;
+                return (
+                  <div
+                    key={inv.id}
+                    className="bg-panel/80 border border-ember/25 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-ember/20 to-ember/5 border border-ember/20 text-ember font-bold text-sm flex items-center justify-center shrink-0">
+                        {inv.workspaceName.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-cream truncate">{inv.workspaceName}</p>
+                        <p className="text-[13px] text-faint truncate">
+                          Invited by <span className="text-sand font-medium">{inv.inviterName}</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleRespond(inv.id, 'reject')}
+                        disabled={isBusy}
+                        className="px-3.5 py-2 rounded-xl text-[13px] font-semibold text-sand bg-panel-2 hover:bg-line border border-line disabled:opacity-50 disabled:cursor-wait transition-colors cursor-pointer flex items-center gap-1.5"
+                      >
+                        <X size={12} /> Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRespond(inv.id, 'accept')}
+                        disabled={isBusy}
+                        className="px-3.5 py-2 rounded-xl bg-ember hover:bg-ember-2 text-on-ember text-[13px] font-bold disabled:opacity-50 disabled:cursor-wait transition-colors shadow-lg shadow-ember/20 cursor-pointer flex items-center gap-1.5"
+                      >
+                        {isBusy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        Accept
+                      </button>
+                    </div>
+
+                    {note && (
+                      <div
+                        className={`text-[12px] flex items-center gap-1.5 ${
+                          note.kind === 'ok' ? 'text-leaf' : 'text-rust'
+                        }`}
+                      >
+                        {note.kind === 'ok' ? <Check size={11} /> : <X size={11} />}
+                        <span>{note.text}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         {/* -- Action tabs ----------------------------------------------- */}

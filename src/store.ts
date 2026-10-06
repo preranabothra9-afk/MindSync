@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
-import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, ContradictionDiscussion, Evidence, EvidenceKind, Decision, DecisionGateResult, DecisionReplay, DecisionSummary, WorkspaceMember } from './types';
+import { User, Workspace, Conversation, Message, SavedResponse, Claim, ClaimRelation, DiscussionComment, ContradictionVote, ContradictionVoteChoice, ContradictionDiscussion, Evidence, EvidenceKind, Decision, DecisionGateResult, DecisionReplay, DecisionSummary, WorkspaceMember, Invitation } from './types';
 
 /** Compact search hit returned by the room history search endpoint. */
 export interface SearchResult {
@@ -124,6 +124,12 @@ export interface AppState {
   createWorkspace: (name: string, description: string) => Promise<Workspace | null>;
   deleteWorkspace: (id: string) => Promise<void>;
   setActiveWorkspace: (ws: Workspace) => void;
+
+  // Invitation Actions
+  // A collaborator only joins once they accept; reject counts toward the cap.
+  pendingInvitations: Invitation[];
+  fetchPendingInvitations: () => Promise<void>;
+  respondToInvitation: (invitationId: string, response: 'accept' | 'reject') => Promise<{ success: boolean; message: string; remaining?: number; blocked?: boolean }>;
 
   // Channel Actions
   fetchConversations: (workspaceId: string) => Promise<void>;
@@ -436,6 +442,19 @@ export const useStore = create<AppState>((set, get) => {
         });
       }
       get().fetchWorkspaces();
+    });
+
+    // A fresh invitation arrives against the user's own room, so the hub can
+    // surface the accept/reject choice the moment it is sent rather than on the
+    // next manual refresh.
+    socket.on('invitation-received', () => {
+      get().fetchPendingInvitations();
+    });
+
+    // An invitation the user already answered elsewhere (another tab, or the
+    // accept/reject button itself) should not linger in the pending list.
+    socket.on('invitation-updated', () => {
+      get().fetchPendingInvitations();
     });
 
     socket.on('channel-created', (newChannel: Conversation) => {
@@ -808,6 +827,7 @@ export const useStore = create<AppState>((set, get) => {
 
     workspaces: useWorkspaceStore.getState().workspaces,
     activeWorkspace: useWorkspaceStore.getState().activeWorkspace,
+    pendingInvitations: useWorkspaceStore.getState().pendingInvitations,
     
     conversations: useChatStore.getState().conversations,
     activeConversation: useChatStore.getState().activeConversation,
@@ -857,6 +877,7 @@ export const useStore = create<AppState>((set, get) => {
           useAuthStore.setState({ user: data.user, token: data.token, authError: null });
           
           await get().fetchWorkspaces({ autoEnter: false });
+          get().fetchPendingInvitations();
         } else {
           useAuthStore.setState({ user: null, token: null });
         }
@@ -891,6 +912,9 @@ export const useStore = create<AppState>((set, get) => {
           });
 
           await get().fetchWorkspaces({ autoEnter: false });
+          // Invitations arrive while the user is away; load them alongside the
+          // workspace directory so the hub can present them at sign-in.
+          get().fetchPendingInvitations();
           useAuthStore.setState({ isAuthenticating: false });
           return true;
         } else {
@@ -1155,6 +1179,45 @@ export const useStore = create<AppState>((set, get) => {
       const user = useAuthStore.getState().user;
       if (user) {
         setupSocket(user, ws.id);
+      }
+    },
+
+    fetchPendingInvitations: async () => {
+      try {
+        const res = await secureFetch(`${API_BASE}/invitations/pending`);
+        if (res.ok) {
+          const data = await res.json();
+          useWorkspaceStore.setState({ pendingInvitations: data.invitations || [] });
+        }
+      } catch (err) {
+        console.error('Pending invitations retrieval error:', err);
+      }
+    },
+
+    respondToInvitation: async (invitationId, response) => {
+      try {
+        const res = await secureFetch(`${API_BASE}/invitations/${invitationId}/${response}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (res.ok) {
+          // Refresh both lists: the invitation leaves pending, and on accept a
+          // new workspace appears in the directory.
+          await get().fetchPendingInvitations();
+          if (response === 'accept') {
+            await get().fetchWorkspaces({ autoEnter: false });
+          }
+          return {
+            success: true,
+            message: data.message,
+            remaining: data.remaining,
+            blocked: data.blocked,
+          };
+        }
+        return { success: false, message: data.error || 'Could not respond to the invitation.' };
+      } catch (err) {
+        return { success: false, message: 'Network error. Try again.' };
       }
     },
 
@@ -2202,6 +2265,7 @@ useWorkspaceStore.subscribe((state) => {
   useStore.setState({
     workspaces: state.workspaces,
     activeWorkspace: state.activeWorkspace,
+    pendingInvitations: state.pendingInvitations,
   });
 });
 

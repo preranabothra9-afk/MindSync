@@ -73,6 +73,10 @@ export function setupSocketIO(server: HttpServer) {
 
       // Attach credentials to socket context
       socket.data = { user };
+      // A personal room lets the server deliver user-targeted events (a
+      // workspace invitation landing in the recipient's hub) without
+      // broadcasting to every connected socket and filtering client-side.
+      socket.join(`user:${user.id}`);
       next();
     } catch (err: any) {
       // An expired access token on reconnect is expected — the client silently

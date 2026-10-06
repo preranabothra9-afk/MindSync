@@ -34,7 +34,7 @@ export default function InviteModal({ isOpen, onClose }: InviteModalProps) {
       
       if (res.ok) {
         setStatus('success');
-        setMsg(`Success: ${data.member.name} has been added to this workspace.`);
+        setMsg(`Invitation sent to ${data.invitation.inviteeEmail}. They can join once they accept it.`);
         setEmail('');
       } else {
         setStatus('error');
@@ -97,7 +97,7 @@ export default function InviteModal({ isOpen, onClose }: InviteModalProps) {
               <Mail size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-faint pointer-events-none" />
             </div>
             <p className="text-[13px] text-faint font-sans mt-1">
-              Tip: Enter any email to instantly invite or provision them to your team sandbox.
+              Tip: They will receive a request they can accept or reject. Anyone who declines 5 times can no longer be invited to this workspace.
             </p>
           </div>
 

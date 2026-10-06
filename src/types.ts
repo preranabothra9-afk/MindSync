@@ -20,6 +20,18 @@ export interface Workspace {
   createdAt: string;
 }
 
+export interface Invitation {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  inviterId: string;
+  inviterName: string;
+  inviteeId: string;
+  inviteeEmail: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: string;
+}
+
 export interface Conversation {
   id: string;
   workspaceId: string;
