@@ -3,7 +3,8 @@ import { useStore } from '../store';
 import {
   Sparkles, ArrowRight, LogIn, UserPlus, Layers, Users,
   Columns3, BookmarkCheck, LineChart, ShieldCheck, Zap, Hash,
-  CheckCircle2, ChevronRight, Cpu, MessageSquare, LayoutDashboard, LogOut
+  CheckCircle2, ChevronRight, Cpu, MessageSquare, LayoutDashboard, LogOut,
+  MailCheck, BadgeCheck, Gavel, Scale, Quote, Paperclip
 } from 'lucide-react';
 import { MindMark, BRAND } from '../brand';
 import ThemeSwitcher from './ThemeSwitcher';
@@ -60,7 +61,7 @@ export default function HomePage() {
       />
 
       {/* ── Theme switcher ──────────────────────────────────────────── */}
-      <ThemeSwitcher variant="floating" className="fixed top-4 right-4 z-[60]" />
+      <ThemeSwitcher variant="floating" className="fixed top-4 right-4 z-60" />
 
       {/* ── Navbar ──────────────────────────────────────────────────── */}
       <header
@@ -79,6 +80,7 @@ export default function HomePage() {
           <div className="hidden md:flex items-center gap-7 text-sm">
             <a href="#features" className="text-sand hover:text-cream transition-colors">Features</a>
             <a href="#how-it-works" className="text-sand hover:text-cream transition-colors">How it works</a>
+            <a href="#decisions" className="text-sand hover:text-cream transition-colors">Decisions</a>
             <a href="#models" className="text-sand hover:text-cream transition-colors">Models</a>
           </div>
 
@@ -86,7 +88,7 @@ export default function HomePage() {
             {isLoggedIn ? (
               <>
                 <div className="hidden sm:flex items-center gap-2 mr-1">
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-ember to-ember-2 text-on-ember font-bold flex items-center justify-center text-[13px] ring-2 ring-ember/20">
+                  <div className="w-7 h-7 rounded-full bg-linear-to-br from-ember to-ember-2 text-on-ember font-bold flex items-center justify-center text-[13px] ring-2 ring-ember/20">
                     {user?.avatar || user?.name?.[0]?.toUpperCase() || 'U'}
                   </div>
                   <span className="text-[13px] font-medium text-cream">{user?.name}</span>
@@ -276,8 +278,13 @@ export default function HomePage() {
               How it works
             </span>
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-cream mt-2">
-              From prompt to decision in three steps
+              From sign-up to decision in six steps
             </h2>
+            <p className="text-sand mt-4 leading-relaxed">
+              Every step is built so the right people are in the room: verified
+              accounts, invitations each member accepts for themselves, and a
+              roster that always shows who is online.
+            </p>
           </Reveal>
 
           <div className="grid md:grid-cols-3 gap-6">
@@ -296,6 +303,67 @@ export default function HomePage() {
               </Reveal>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── Decision pipeline ──────────────────────────────────────── */}
+      <section id="decisions" className="relative py-24 px-5 sm:px-8 scroll-mt-20">
+        <div className="max-w-6xl mx-auto">
+          <Reveal className="text-center max-w-2xl mx-auto mb-14">
+            <span className="text-[13px] font-mono font-bold uppercase tracking-widest text-ember-soft">
+              The decision pipeline
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-cream mt-2">
+              A compared answer is not a decision
+            </h2>
+            <p className="text-sand mt-4 leading-relaxed">
+              Side-by-side answers settle which model phrased it best. They don't settle what the
+              team commits to. Every room carries the pipeline below, so a decision lands only
+              when the evidence behind it holds up.
+            </p>
+          </Reveal>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {PIPELINE.map((p, i) => (
+              <Reveal key={p.title} delay={i * 80}>
+                <div className="relative glass border border-line rounded-2xl p-7 h-full hover:border-line-2 transition-colors">
+                  <span className="absolute -top-3 left-7 px-2.5 py-0.5 rounded-full bg-ember text-on-ember text-[13px] font-mono font-bold tracking-wider">
+                    STAGE {i + 1}
+                  </span>
+                  <div className="w-11 h-11 rounded-xl bg-ember/10 border border-ember/20 flex items-center justify-center text-ember mb-4">
+                    <p.icon size={19} />
+                  </div>
+                  <h3 className="text-base font-semibold text-cream mb-2">{p.title}</h3>
+                  <p className="text-sm text-sand leading-relaxed">{p.desc}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+
+          {/* Evidence gate callout */}
+          <Reveal className="mt-6">
+            <div className="border-glow glass-strong rounded-3xl p-8 sm:p-10 flex flex-col md:flex-row items-start gap-6">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-ember to-ember-2 text-on-ember flex items-center justify-center shrink-0 shadow-lg shadow-ember/20">
+                <Gavel size={22} />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-cream mb-2">The evidence gate</h3>
+                <p className="text-sand leading-relaxed">
+                  A decision refuses to finalize until its claims carry evidence or a human
+                  resolution, its contradictions are closed, and every required approver has signed
+                  off. AI-generated references never count — a model's say-so is a lead to check,
+                  not proof. What closes the gate is the room.
+                </p>
+                <div className="flex flex-wrap gap-2 mt-5">
+                  {['Claims evidenced', 'Contradictions resolved', 'Approvers signed off', 'Then it locks'].map((g) => (
+                    <span key={g} className="px-3 py-1 rounded-full text-[13px] font-mono font-semibold bg-panel-2 border border-line text-sand">
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Reveal>
         </div>
       </section>
 
@@ -388,6 +456,8 @@ export default function HomePage() {
 const MARQUEE = [
   'Gemini 2.5 Flash', 'GPT-OSS 120B', 'Qwen3.8 27B', 'Parallel streaming',
   'Side-by-side diff', 'Live presence', 'Pinned insights', 'Audit logs',
+  'Verified access', 'Invite to join', 'Contradiction detection',
+  'Evidence gate', 'Decision records',
 ];
 
 const FEATURES = [
@@ -404,12 +474,27 @@ const FEATURES = [
   {
     icon: Users,
     title: 'Real-time co-editing',
-    desc: 'Shared prompt drafts with live cursors and presence — refine the wording together before you ever hit send.',
+    desc: 'Shared prompt drafts with live cursors, and a roster that lists every member with their status — online, offline, or mid-action — so you always know who is in the room.',
   },
   {
     icon: BookmarkCheck,
     title: 'Pinned insights',
     desc: 'Bookmark the winning output to a workspace library. Every pin keeps its prompt, model, and author attached.',
+  },
+  {
+    icon: Quote,
+    title: 'Claims the room remembers',
+    desc: 'Every quotable assertion a model makes is mined into a durable claim, so the next prompt builds on what the room already established instead of starting from scratch.',
+  },
+  {
+    icon: Scale,
+    title: 'Contradictions, caught',
+    desc: 'When two models disagree, the detector flags the pair with its confidence and an explanation. The AI detects contradictions — it never decides which claim is true; an authorized human does.',
+  },
+  {
+    icon: Gavel,
+    title: 'Decisions behind an evidence gate',
+    desc: 'A decision finalizes only once its claims carry evidence, its contradictions are resolved, and every approver has signed off. Then it locks — with its full history and a replay of how it got there.',
   },
   {
     icon: LineChart,
@@ -421,13 +506,38 @@ const FEATURES = [
     title: 'Hardened by default',
     desc: 'Dual-token JWT rotation, httpOnly refresh cookies, and role-based admin boundaries on every route.',
   },
+  {
+    icon: MailCheck,
+    title: 'Invitations you choose to accept',
+    desc: 'Invite teammates by email and they decide — accept or reject from their own workspace hub. Nobody lands in a room without saying yes, and a room you have declined five times stops asking.',
+  },
+  {
+    icon: LogOut,
+    title: 'Leave anytime',
+    desc: 'Step out of a workspace whenever you like. Owners hand the room to a teammate first, so a project never loses its lead — and a sole owner is asked to delete instead.',
+  },
+  {
+    icon: BadgeCheck,
+    title: 'Verified, then admitted',
+    desc: 'Every account confirms its email before touching a workspace, so the people in your rooms are the people behind the addresses you invited.',
+  },
 ];
 
 const STEPS = [
   {
+    icon: BadgeCheck,
+    title: 'Verify your account',
+    desc: 'Sign up and confirm your email — verification is the door to every workspace, so a room only ever admits the person behind the address.',
+  },
+  {
+    icon: MailCheck,
+    title: 'Invite your team',
+    desc: 'Bring teammates in by email. They accept or reject from their own workspace hub, and a room you have declined five times stops asking.',
+  },
+  {
     icon: MessageSquare,
     title: 'Prompt once',
-    desc: 'Draft your prompt with the team, toggle the models you want to query, and broadcast it to all of them at once.',
+    desc: 'Draft the prompt together with live cursors, toggle the models you want to query, and broadcast it to all of them at once.',
   },
   {
     icon: Zap,
@@ -437,14 +547,42 @@ const STEPS = [
   {
     icon: CheckCircle2,
     title: 'Pin the best',
-    desc: 'Save the winning response to the workspace library, then iterate — every run stays in your history.',
+    desc: 'Save the winning response to the workspace library — every pin keeps its prompt, model, and author attached.',
+  },
+  {
+    icon: LogOut,
+    title: 'Leave anytime',
+    desc: 'Step out of a workspace whenever you like. Owners hand the room to a teammate first, so a project never loses its lead.',
+  },
+];
+
+const PIPELINE = [
+  {
+    icon: Quote,
+    title: 'Claims become memory',
+    desc: 'Every quotable assertion a model makes is mined into a durable claim, so the next prompt is grounded in what the room has already established instead of starting from scratch.',
+  },
+  {
+    icon: Scale,
+    title: 'Contradictions surface',
+    desc: 'When two models cannot both be right, the detector flags the pair with its confidence and an explanation — then a human adjudicates, with a recorded reason and optional cited evidence.',
+  },
+  {
+    icon: Paperclip,
+    title: 'Evidence is pinned',
+    desc: 'Members back a claim with a link, a verbatim quote, a file, or a note of their own. Only human-attached evidence satisfies the gate; an AI reference is a lead to check, not proof.',
+  },
+  {
+    icon: Gavel,
+    title: 'The room decides',
+    desc: 'Draft the commitment, link the claims, name the approvers. Once the gate is satisfied the decision locks — with its whole history intact and a replay of how it got there.',
   },
 ];
 
 const STATS = [
   { value: '3+', label: 'models per prompt', icon: Layers },
   { value: '<1s', label: 'to first token', icon: Zap },
-  { value: '∞', label: 'collaborators', icon: Users },
+  { value: '0', label: 'decisions without evidence', icon: Gavel },
   { value: '100%', label: 'actions audited', icon: ShieldCheck },
 ];
 
@@ -456,7 +594,7 @@ function HeroMock() {
     <div className="parallax relative" style={{ ['--depth' as string]: '26px' }}>
       {/* Glow behind window */}
       <div
-        className="absolute -inset-6 rounded-[2rem] blur-3xl opacity-40"
+        className="absolute -inset-6 rounded-4xl blur-3xl opacity-40"
         style={{ background: 'radial-gradient(circle, color-mix(in srgb, var(--color-ember) 40%, transparent), transparent 70%)' }}
       />
 
@@ -528,7 +666,7 @@ function HeroMock() {
               </div>
 
               {/* Streaming answer lines */}
-              <div className="p-2.5 space-y-1.5 min-h-[5.5rem]">
+              <div className="p-2.5 space-y-1.5 min-h-22">
                 {m.lines.map((w, j) => (
                   <div
                     key={j}
