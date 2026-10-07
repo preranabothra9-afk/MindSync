@@ -1,52 +1,53 @@
 @import "tailwindcss";
 
 /* --------------------------------------------------------------------- */
-/*  MindSync -- Warm & Approachable Design System                           */
-/*  "Linen" (light) + "Obsidian" (warm espresso) + "Nebula" (warm plum). */
-/*  Token names are shared so every component swaps theme automatically.  */
+/*  MindSync -- Indigo Design System                                         */
+/*  "Linen" (light) + "Obsidian" (near-black slate) + "Nebula" (violet     */
+/*  dusk). Indigo/violet is the single accent. Token names are shared so   */
+/*  every component swaps theme automatically.                             */
 /*  Fonts are loaded in index.html: Fraunces + Mulish + JetBrains Mono.  */
 /* --------------------------------------------------------------------- */
 
 @theme {
   /* -- Surfaces ----------------------------------------------------- */
-  --color-ink: #fbf6ef;          /* page base -- warm cream */
+  --color-ink: #f6f7fb;          /* page base -- cool paper */
   --color-panel: #ffffff;        /* raised card */
-  --color-panel-2: #f5ede2;      /* inset / subtle panel */
-  --color-line: #eadfd0;         /* hairline border */
-  --color-line-2: #dbcdb9;       /* strong / hover border */
+  --color-panel-2: #eceef7;      /* inset / subtle panel */
+  --color-line: #dde2ef;         /* hairline border */
+  --color-line-2: #c6cde2;       /* strong / hover border */
 
-  /* -- Text -- warm neutrals ------------------------------------------ */
-  --color-cream: #33291f;        /* primary — 13.2:1 */
-  --color-sand: #6e5f50;         /* muted — 5.7:1 */
-  --color-faint: #7e6e5e;        /* faint — 4.6:1 */
+  /* -- Text -- cool neutrals ------------------------------------------ */
+  --color-cream: #1b1e2e;        /* primary — 14.8:1 */
+  --color-sand: #4c5266;         /* muted — 7.1:1 */
+  --color-faint: #6b7186;        /* faint — 4.9:1 */
 
-  /* -- Accents -- single teal ramp (deeper on light) ------------- */
-  --color-ember: #0f6b6b;        /* primary accent — 5.9:1 on ink */
-  --color-ember-soft: #0b5a5a;   /* text-safe accent — 7.5:1 */
-  --color-ember-2: #094a4a;      /* deep accent / hover */
+  /* -- Accents -- single indigo ramp (deeper on light) ------------- */
+  --color-ember: #4f46e5;        /* primary accent — 6.6:1 on ink */
+  --color-ember-soft: #4338ca;   /* text-safe accent — 8.1:1 */
+  --color-ember-2: #3730a3;      /* deep accent / hover */
 
-  /* -- Semantic -- sage / brick ------------- */
-  --color-leaf: #3f6638;         /* success / online */
-  --color-rust: #b23a48;         /* destructive — 5.4:1 */
+  /* -- Semantic -- green / red ------------- */
+  --color-leaf: #15803d;         /* success / online */
+  --color-rust: #dc2626;         /* destructive — 5.9:1 */
 
   /* Warning/caution text. The old hardcoded `text-amber-400` was a
      dark-theme-only colour: on the light theme's pale amber tint it
      measured 1.56:1. This token is dark enough for light mode and
      bright enough for the dark themes. */
-  --color-warn: #8a5a00;         /* 5.1:1 on the amber tint */
+  --color-warn: #8a5a00;         /* 5.4:1 on the amber tint */
 
   /* Categorical section hues. These keep the per-section colour coding
      (users=blue, workspaces=violet, streams=indigo) while staying
      theme-aware. The hardcoded `text-blue-400` / `text-violet-400` /
      `text-indigo-400` these replace were dark-theme-only and measured
      2.4-2.6:1 on the light theme. */
-  --color-cat-blue: #1d4ed8;      /* 6.7:1 on paper */
-  --color-cat-violet: #6d28d9;    /* 7.1:1 on paper */
-  --color-cat-indigo: #4338ca;    /* 7.4:1 on paper */
+  --color-cat-blue: #1d4ed8;      /* 7.2:1 on paper */
+  --color-cat-violet: #6d28d9;    /* 7.6:1 on paper */
+  --color-cat-indigo: #4338ca;    /* 7.9:1 on paper */
 
   /* Colour of text/icons sitting ON an ember-filled surface. White on light
-     mode's deep teal; near-black on the light teal that the dark themes use
-     as their accent — white there would be unreadable. */
+     mode's deep indigo; near-black on the light indigo that the dark themes
+     use as their accent — white there would be unreadable. */
   --color-on-ember: #ffffff;
 
   /* -- Type ---------------------------------------------------------- */
@@ -54,146 +55,146 @@
   --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* -- Elevation -- soft, warm-toned layered shadows ------------------ */
-  --shadow-sm: 0 1px 2px rgba(74, 59, 49, 0.05), 0 1px 3px rgba(74, 59, 49, 0.03);
-  --shadow-md: 0 2px 6px rgba(74, 59, 49, 0.06), 0 1px 2px rgba(74, 59, 49, 0.03);
-  --shadow-lg: 0 4px 14px rgba(74, 59, 49, 0.08), 0 2px 4px rgba(74, 59, 49, 0.03);
-  --shadow-xl: 0 12px 32px rgba(74, 59, 49, 0.10), 0 4px 12px rgba(74, 59, 49, 0.05);
-  --shadow-2xl: 0 24px 64px rgba(74, 59, 49, 0.14), 0 8px 24px rgba(74, 59, 49, 0.06);
+  /* -- Elevation -- cool-toned layered shadows ------------------------ */
+  --shadow-sm: 0 1px 2px rgba(27, 30, 46, 0.05), 0 1px 3px rgba(27, 30, 46, 0.03);
+  --shadow-md: 0 2px 6px rgba(27, 30, 46, 0.06), 0 1px 2px rgba(27, 30, 46, 0.03);
+  --shadow-lg: 0 4px 14px rgba(27, 30, 46, 0.08), 0 2px 4px rgba(27, 30, 46, 0.03);
+  --shadow-xl: 0 12px 32px rgba(27, 30, 46, 0.10), 0 4px 12px rgba(27, 30, 46, 0.05);
+  --shadow-2xl: 0 24px 64px rgba(27, 30, 46, 0.14), 0 8px 24px rgba(27, 30, 46, 0.06);
 }
 
 /* -- Light-mode extra tokens -------------------------------------------- */
 :root {
-  --grid-dot: rgba(74, 59, 49, 0.05);
-  --heading: #241c14;
+  --grid-dot: rgba(27, 30, 46, 0.05);
+  --heading: #141726;
   --glass-bg: rgba(255, 255, 255, 0.76);
   --glass-strong: rgba(255, 255, 255, 0.94);
-  --glass-border: rgba(74, 59, 49, 0.10);
-  --scrim: rgba(51, 41, 31, 0.30);
+  --glass-border: rgba(27, 30, 46, 0.10);
+  --scrim: rgba(27, 30, 46, 0.30);
   --code-inline-bg: color-mix(in srgb, var(--color-ember) 10%, transparent);
-  --pre-bg: #f7f1e8;
+  --pre-bg: #f1f2f9;
   color-scheme: light;
 
-  /* Brand gradients — teal */
-  --brand-gradient-primary: linear-gradient(135deg, #22a19a 0%, #0f6b6b 45%, #094a4a 100%);
-  --brand-gradient-accent: linear-gradient(135deg, #0f6b6b 0%, #094a4a 100%);
-  --brand-gradient-subtle: linear-gradient(135deg, rgba(15, 107, 107, 0.10) 0%, rgba(9, 74, 74, 0.03) 100%);
+  /* Brand gradients — indigo */
+  --brand-gradient-primary: linear-gradient(135deg, #818cf8 0%, #4f46e5 45%, #3730a3 100%);
+  --brand-gradient-accent: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+  --brand-gradient-subtle: linear-gradient(135deg, rgba(79, 70, 229, 0.10) 0%, rgba(55, 48, 163, 0.03) 100%);
 
   /* Legacy surface aliases (kept for compatibility) */
-  --brand-surface-base: #fbf6ef;
+  --brand-surface-base: #f6f7fb;
   --brand-surface-elevated: #ffffff;
-  --brand-surface-overlay: #f5ede2;
-  --brand-surface-subtle: #eadfd0;
+  --brand-surface-overlay: #eceef7;
+  --brand-surface-subtle: #dde2ef;
 
   /* Animation timing */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* -- Dark-mode token overrides ("Obsidian" -- warm espresso) ------------- */
+/* -- Dark-mode token overrides ("Obsidian" -- near-black slate) --------- */
 /* :root.dark specificity (0,2,0) beats :root (0,1,0), so utilities that  */
 /* reference var(--color-*) flip automatically when <html class="dark">.  */
 :root.dark {
-  --color-ink: #171310;          /* page base -- warm espresso */
-  --color-panel: #201a16;        /* raised card */
-  --color-panel-2: #2a221c;      /* inset / subtle panel */
-  --color-line: #372c24;         /* hairline border */
-  --color-line-2: #4a3b31;       /* strong / hover border */
+  --color-ink: #0e1017;          /* page base -- near-black slate */
+  --color-panel: #161a24;        /* raised card */
+  --color-panel-2: #1e232f;      /* inset / subtle panel */
+  --color-line: #2a3040;         /* hairline border */
+  --color-line-2: #394154;       /* strong / hover border */
 
-  --color-cream: #f6eee6;        /* primary */
-  --color-sand: #bfae9f;         /* muted */
-  --color-faint: #9d8a79;        /* faint — 5.4:1 on ink */
-  --color-on-ember: #0a2422;     /* dark text on the light teal accent */
+  --color-cream: #eef1f8;        /* primary */
+  --color-sand: #aab2c6;         /* muted */
+  --color-faint: #858da3;        /* faint — 5.6:1 on ink */
+  --color-on-ember: #1e1b4b;     /* dark text on the light indigo accent */
 
-  --color-ember: #45c4b8;        /* primary accent (lifted for dark) */
-  --color-ember-soft: #6fd8cc;   /* light accent */
-  --color-ember-2: #2f9a90;      /* deep accent */
+  --color-ember: #818cf8;        /* primary accent (lifted for dark) */
+  --color-ember-soft: #a5b4fc;   /* light accent */
+  --color-ember-2: #6366f1;      /* deep accent */
 
-  --color-leaf: #86b06e;         /* success / online */
-  --color-rust: #e8776b;         /* destructive */
-  --color-warn: #f5b83d;         /* 9.5:1 on the dark amber tint */
+  --color-leaf: #4ade80;         /* success / online */
+  --color-rust: #f87171;         /* destructive */
+  --color-warn: #f5b83d;         /* 9.6:1 on the dark amber tint */
 
-  --color-cat-blue: #60a5fa;      /* 7.2:1 on ink */
-  --color-cat-violet: #a78bfa;    /* 6.7:1 on ink */
-  --color-cat-indigo: #818cf8;    /* 6.9:1 on ink */
+  --color-cat-blue: #60a5fa;      /* 7.4:1 on ink */
+  --color-cat-violet: #a78bfa;    /* 6.9:1 on ink */
+  --color-cat-indigo: #818cf8;    /* 7.1:1 on ink */
 
-  --shadow-sm: 0 1px 2px rgba(20, 14, 10, 0.40), 0 1px 3px rgba(20, 14, 10, 0.24);
-  --shadow-md: 0 2px 6px rgba(20, 14, 10, 0.45), 0 1px 2px rgba(20, 14, 10, 0.30);
-  --shadow-lg: 0 4px 14px rgba(20, 14, 10, 0.50), 0 2px 4px rgba(20, 14, 10, 0.32);
-  --shadow-xl: 0 12px 32px rgba(20, 14, 10, 0.55), 0 4px 12px rgba(20, 14, 10, 0.36);
-  --shadow-2xl: 0 24px 64px rgba(20, 14, 10, 0.60), 0 8px 24px rgba(20, 14, 10, 0.42);
+  --shadow-sm: 0 1px 2px rgba(8, 10, 16, 0.40), 0 1px 3px rgba(8, 10, 16, 0.24);
+  --shadow-md: 0 2px 6px rgba(8, 10, 16, 0.45), 0 1px 2px rgba(8, 10, 16, 0.30);
+  --shadow-lg: 0 4px 14px rgba(8, 10, 16, 0.50), 0 2px 4px rgba(8, 10, 16, 0.32);
+  --shadow-xl: 0 12px 32px rgba(8, 10, 16, 0.55), 0 4px 12px rgba(8, 10, 16, 0.36);
+  --shadow-2xl: 0 24px 64px rgba(8, 10, 16, 0.60), 0 8px 24px rgba(8, 10, 16, 0.42);
 
   --grid-dot: rgba(255, 255, 255, 0.05);
-  --heading: #fdf6ee;
-  --glass-bg: rgba(32, 26, 22, 0.76);
-  --glass-strong: rgba(42, 34, 28, 0.94);
+  --heading: #f4f6fc;
+  --glass-bg: rgba(22, 26, 36, 0.76);
+  --glass-strong: rgba(30, 35, 47, 0.94);
   --glass-border: rgba(255, 255, 255, 0.10);
-  --scrim: rgba(20, 14, 10, 0.62);
+  --scrim: rgba(8, 10, 16, 0.62);
   --code-inline-bg: color-mix(in srgb, var(--color-ember-soft) 16%, transparent);
-  --pre-bg: #1b1611;
+  --pre-bg: #131620;
 
-  --brand-gradient-primary: linear-gradient(135deg, #6fd8cc 0%, #45c4b8 45%, #2f9a90 100%);
-  --brand-gradient-accent: linear-gradient(135deg, #45c4b8 0%, #2f9a90 100%);
-  --brand-gradient-subtle: linear-gradient(135deg, rgba(69, 196, 184, 0.14) 0%, rgba(47, 154, 144, 0.05) 100%);
+  --brand-gradient-primary: linear-gradient(135deg, #a5b4fc 0%, #818cf8 45%, #6366f1 100%);
+  --brand-gradient-accent: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+  --brand-gradient-subtle: linear-gradient(135deg, rgba(129, 140, 248, 0.14) 0%, rgba(99, 102, 241, 0.05) 100%);
 
-  --brand-surface-base: #171310;
-  --brand-surface-elevated: #201a16;
-  --brand-surface-overlay: #2a221c;
-  --brand-surface-subtle: #372c24;
+  --brand-surface-base: #0e1017;
+  --brand-surface-elevated: #161a24;
+  --brand-surface-overlay: #1e232f;
+  --brand-surface-subtle: #2a3040;
 
   color-scheme: dark;
 }
 
-/* -- Nebula token overrides ("Nebula" -- cool dusk) ---------------- */
+/* -- Nebula token overrides ("Nebula" -- violet dusk) ------------------ */
 /* Same (0,2,0) specificity as :root.dark; only one mode class is ever     */
 /* present on <html>, so the two never compete.                           */
 :root.nebula {
-  --color-ink: #1a1620;          /* page base — cool dusk */
-  --color-panel: #241e2c;        /* raised card */
-  --color-panel-2: #2e2637;      /* inset / subtle panel */
-  --color-line: #3a3045;         /* hairline border */
-  --color-line-2: #4d4059;       /* strong / hover border */
+  --color-ink: #1a1830;          /* page base — violet dusk */
+  --color-panel: #241f3d;        /* raised card */
+  --color-panel-2: #2f2947;      /* inset / subtle panel */
+  --color-line: #3d3656;         /* hairline border */
+  --color-line-2: #4f4668;       /* strong / hover border */
 
-  --color-cream: #f2ecef;        /* primary */
-  --color-sand: #b3a7b8;         /* muted */
-  --color-faint: #9b8fa0;        /* faint */
-  --color-on-ember: #0a2422;     /* dark text on the light teal accent */
+  --color-cream: #efe9fb;        /* primary */
+  --color-sand: #b8aed0;         /* muted */
+  --color-faint: #9d92b8;        /* faint — 5.2:1 on ink */
+  --color-on-ember: #1e1b4b;     /* dark text on the light violet accent */
 
-  --color-ember: #3fb8ae;        /* primary accent — teal */
-  --color-ember-soft: #63cfc5;   /* light accent */
-  --color-ember-2: #2b8f86;      /* deep accent */
+  --color-ember: #a78bfa;        /* primary accent — violet */
+  --color-ember-soft: #c4b5fd;   /* light accent */
+  --color-ember-2: #8b5cf6;      /* deep accent */
 
-  --color-leaf: #8fbc6a;         /* success / online */
-  --color-rust: #e8776b;         /* destructive */
-  --color-warn: #f5b83d;         /* 9.5:1 on the dark amber tint */
+  --color-leaf: #86efac;         /* success / online */
+  --color-rust: #f87171;         /* destructive */
+  --color-warn: #f5b83d;         /* 9.4:1 on the dark amber tint */
 
-  --color-cat-blue: #60a5fa;      /* 7.2:1 on ink */
-  --color-cat-violet: #a78bfa;    /* 6.7:1 on ink */
-  --color-cat-indigo: #818cf8;    /* 6.9:1 on ink */
+  --color-cat-blue: #60a5fa;      /* 7.4:1 on ink */
+  --color-cat-violet: #a78bfa;    /* 6.9:1 on ink */
+  --color-cat-indigo: #818cf8;    /* 7.1:1 on ink */
 
-  --shadow-sm: 0 1px 2px rgba(14, 8, 16, 0.45), 0 1px 3px rgba(14, 8, 16, 0.28);
-  --shadow-md: 0 2px 6px rgba(14, 8, 16, 0.50), 0 1px 2px rgba(14, 8, 16, 0.32);
-  --shadow-lg: 0 4px 14px rgba(14, 8, 16, 0.55), 0 2px 4px rgba(14, 8, 16, 0.36);
-  --shadow-xl: 0 12px 32px rgba(14, 8, 16, 0.60), 0 4px 12px rgba(14, 8, 16, 0.40);
-  --shadow-2xl: 0 24px 64px rgba(14, 8, 16, 0.66), 0 8px 24px rgba(14, 8, 16, 0.46);
+  --shadow-sm: 0 1px 2px rgba(10, 8, 22, 0.45), 0 1px 3px rgba(10, 8, 22, 0.28);
+  --shadow-md: 0 2px 6px rgba(10, 8, 22, 0.50), 0 1px 2px rgba(10, 8, 22, 0.32);
+  --shadow-lg: 0 4px 14px rgba(10, 8, 22, 0.55), 0 2px 4px rgba(10, 8, 22, 0.36);
+  --shadow-xl: 0 12px 32px rgba(10, 8, 22, 0.60), 0 4px 12px rgba(10, 8, 22, 0.40);
+  --shadow-2xl: 0 24px 64px rgba(10, 8, 22, 0.66), 0 8px 24px rgba(10, 8, 22, 0.46);
 
-  --grid-dot: rgba(99, 207, 197, 0.07);
-  --heading: #faf4f7;
-  --glass-bg: rgba(40, 28, 44, 0.78);
-  --glass-strong: rgba(51, 35, 58, 0.94);
-  --glass-border: rgba(99, 207, 197, 0.16);
-  --scrim: rgba(14, 8, 16, 0.64);
+  --grid-dot: rgba(167, 139, 250, 0.08);
+  --heading: #f6f1fd;
+  --glass-bg: rgba(36, 31, 61, 0.78);
+  --glass-strong: rgba(47, 41, 71, 0.94);
+  --glass-border: rgba(196, 181, 253, 0.16);
+  --scrim: rgba(10, 8, 22, 0.64);
   --code-inline-bg: color-mix(in srgb, var(--color-ember-soft) 16%, transparent);
-  --pre-bg: #221a2a;
+  --pre-bg: #221d38;
 
-  --brand-gradient-primary: linear-gradient(135deg, #63cfc5 0%, #3fb8ae 45%, #2b8f86 100%);
-  --brand-gradient-accent: linear-gradient(135deg, #3fb8ae 0%, #2b8f86 100%);
-  --brand-gradient-subtle: linear-gradient(135deg, rgba(63, 184, 174, 0.16) 0%, rgba(43, 143, 134, 0.05) 100%);
+  --brand-gradient-primary: linear-gradient(135deg, #c4b5fd 0%, #a78bfa 45%, #8b5cf6 100%);
+  --brand-gradient-accent: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+  --brand-gradient-subtle: linear-gradient(135deg, rgba(167, 139, 250, 0.16) 0%, rgba(139, 92, 246, 0.05) 100%);
 
-  --brand-surface-base: #1a1620;
-  --brand-surface-elevated: #241e2c;
-  --brand-surface-overlay: #2e2637;
-  --brand-surface-subtle: #3a3045;
+  --brand-surface-base: #1a1830;
+  --brand-surface-elevated: #241f3d;
+  --brand-surface-overlay: #2f2947;
+  --brand-surface-subtle: #3d3656;
 
   color-scheme: dark;
 }

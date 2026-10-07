@@ -1206,6 +1206,22 @@ class MongoDatabaseAdapter {
     return map;
   }
 
+  /**
+   * Evidence counts for every claim in `claimIds`, returned as a claimId ->
+   * count map. The claims list shows how many items back each claim without
+   * pulling the (potentially multi-megabyte) evidence documents themselves.
+   */
+  async getEvidenceCounts(conversationId: string, claimIds: string[]): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    if (!claimIds || claimIds.length === 0) return counts;
+    const rows: Array<{ _id: string; count: number }> = await EvidenceModel.aggregate([
+      { $match: { conversationId, claimId: { $in: claimIds } } },
+      { $group: { _id: '$claimId', count: { $sum: 1 } } },
+    ]);
+    for (const row of rows) counts[row._id] = row.count;
+    return counts;
+  }
+
   /** One evidence document, scoped to its room. */
   async getEvidenceById(conversationId: string, evidenceId: string): Promise<Evidence | undefined> {
     const d = await EvidenceModel.findOne({ _id: evidenceId, conversationId }).lean();

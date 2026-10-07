@@ -103,8 +103,8 @@ export const COLORS = {
     '#a5b4fc', // Indigo-300
     '#16a34a', // Green-600 (positive)
     '#dc2626', // Red-600 (negative)
-    '#9c978c', // Neutral faint
-    '#6f6b63', // Neutral muted
+    '#6b7186', // Neutral faint
+    '#4c5266', // Neutral muted
   ],
 } as const;
 
@@ -125,8 +125,8 @@ export const SEO = {
     'AI analytics dashboard',
   ].join(', '),
   robots: 'index, follow',
-  themeColor: '#ffffff',
-  themeColorDark: '#0a0b10',
+  themeColor: '#f6f7fb',
+  themeColorDark: '#0e1017',
   // OpenGraph
   og: {
     type: 'website',

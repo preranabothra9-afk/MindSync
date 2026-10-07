@@ -761,7 +761,7 @@ export const useStore = create<AppState>((set, get) => {
     socket.on('claims-cleared', (data: { conversationId: string }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (data.conversationId !== activeConv?.id) return;
-      useChatStore.setState({ claims: [], relations: [], evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
+      useChatStore.setState({ claims: [], relations: [], evidence: {}, evidenceCounts: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
     });
 
     // Another member removed a prompt and its responses. The claims that
@@ -786,7 +786,7 @@ export const useStore = create<AppState>((set, get) => {
     socket.on('messages-cleared', (data: { conversationId: string }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (data.conversationId !== activeConv?.id) return;
-      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
+      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {}, evidenceCounts: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
     });
 
     // The contradiction detector found a conflict (or other relationship) between
@@ -871,11 +871,15 @@ export const useStore = create<AppState>((set, get) => {
 
     // Another member (or a model, via the member who asked it) attached evidence
     // to a claim. Merge it if we have that claim's evidence loaded; if not, the
-    // detail view will fetch the whole list when it opens.
-    socket.on('evidence-added', (data: { conversationId: string; claimId: string; evidence: Evidence }) => {
+    // detail view will fetch the whole list when it opens. The count is
+    // authoritative either way — the claim row badges off it without loading.
+    socket.on('evidence-added', (data: { conversationId: string; claimId: string; evidence: Evidence; evidenceCount?: number }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (!data?.evidence || data.conversationId !== activeConv?.id) return;
       const claimId = data.claimId || data.evidence.claimId;
+      if (typeof data.evidenceCount === 'number') {
+        useChatStore.setState((s) => ({ evidenceCounts: { ...s.evidenceCounts, [claimId]: data.evidenceCount! } }));
+      }
       // Only merge into a list we've already loaded; an unloaded claim fetches
       // its full list when its detail view opens.
       if (!useChatStore.getState().evidence[claimId]) return;
@@ -884,9 +888,14 @@ export const useStore = create<AppState>((set, get) => {
 
     // A piece of evidence was removed. Drop it locally, along with any
     // citations closed contradictions made of it.
-    socket.on('evidence-deleted', (data: { conversationId: string; claimId: string; evidenceId: string }) => {
+    socket.on('evidence-deleted', (data: { conversationId: string; claimId: string; evidenceId: string; evidenceCount?: number }) => {
       const activeConv = useChatStore.getState().activeConversation;
       if (!data?.evidenceId || data.conversationId !== activeConv?.id) return;
+      // Settle the badge on the server's post-deletion tally even when this
+      // client never opened the claim's evidence list.
+      if (typeof data.evidenceCount === 'number' && data.claimId) {
+        useChatStore.setState((s) => ({ evidenceCounts: { ...s.evidenceCounts, [data.claimId!]: data.evidenceCount! } }));
+      }
       useChatStore.getState().removeEvidence(data.claimId, data.evidenceId);
     });
 
@@ -1460,7 +1469,7 @@ export const useStore = create<AppState>((set, get) => {
     setActiveConversation: (conv) => {
       // Evidence is loaded lazily per claim, so a room switch drops it all —
       // the detail views repopulate as they're opened.
-      useChatStore.setState({ activeConversation: conv, messages: [], hasMoreMessages: false, highlightMessageId: null, claims: [], relations: [], discussions: {}, evidence: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
+      useChatStore.setState({ activeConversation: conv, messages: [], hasMoreMessages: false, highlightMessageId: null, claims: [], relations: [], discussions: {}, evidence: {}, evidenceCounts: {}, decisions: [], decisionGate: null, decisionReplay: null, decisionSummary: null });
       if (conv) {
         get().fetchMessages(conv.id);
         get().fetchClaims(conv.id);
@@ -1532,7 +1541,13 @@ export const useStore = create<AppState>((set, get) => {
         const res = await secureFetch(`${API_BASE}/messages/${conversationId}/claims`);
         if (res.ok) {
           const data = await res.json();
-          useChatStore.setState({ claims: (data.claims ?? []) as Claim[] });
+          // The claims list badges each row with its evidence count; the server
+          // sends the tallies alongside the claims so nothing has to fetch per
+          // row.
+          useChatStore.setState({
+            claims: (data.claims ?? []) as Claim[],
+            evidenceCounts: (data.evidenceCounts ?? {}) as Record<string, number>,
+          });
         }
       } catch (err) {
         console.error('Error fetching room claims:', err);
@@ -1695,18 +1710,21 @@ export const useStore = create<AppState>((set, get) => {
       const before = useChatStore.getState().claims;
       const beforeRelations = useChatStore.getState().relations;
       const beforeEvidence = useChatStore.getState().evidence;
+      const beforeEvidenceCounts = useChatStore.getState().evidenceCounts;
       const { [claimId]: _removed, ...restEvidence } = beforeEvidence;
+      const { [claimId]: _removedCount, ...restEvidenceCounts } = beforeEvidenceCounts;
       useChatStore.setState({
         claims: before.filter((c) => c.id !== claimId),
         // The server cascades edge deletion; mirror it locally so no orphan
         // contradiction outlives the claim it referenced.
         relations: beforeRelations.filter((r) => r.claimAId !== claimId && r.claimBId !== claimId),
         // The claim's evidence goes with it.
-        evidence: restEvidence
+        evidence: restEvidence,
+        evidenceCounts: restEvidenceCounts
       });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims/${claimId}`, { method: 'DELETE' });
-        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
+        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence, evidenceCounts: beforeEvidenceCounts });
         else get().socket?.emit('claim-deleted', { conversationId: conv.id, claimId });
       } catch (err) {
         useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
@@ -1720,13 +1738,14 @@ export const useStore = create<AppState>((set, get) => {
       const before = useChatStore.getState().claims;
       const beforeRelations = useChatStore.getState().relations;
       const beforeEvidence = useChatStore.getState().evidence;
-      useChatStore.setState({ claims: [], relations: [], evidence: {} });
+      const beforeEvidenceCounts = useChatStore.getState().evidenceCounts;
+      useChatStore.setState({ claims: [], relations: [], evidence: {}, evidenceCounts: {} });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}/claims`, { method: 'DELETE' });
-        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
+        if (!res.ok) useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence, evidenceCounts: beforeEvidenceCounts });
         else get().socket?.emit('claims-cleared', { conversationId: conv.id });
       } catch (err) {
-        useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence });
+        useChatStore.setState({ claims: before, relations: beforeRelations, evidence: beforeEvidence, evidenceCounts: beforeEvidenceCounts });
         console.error('Error clearing room claims:', err);
       }
     },
@@ -2210,7 +2229,7 @@ export const useStore = create<AppState>((set, get) => {
       };
       // The room's memory is derived from its messages, so clearing the chat
       // clears the claims and contradictions with it.
-      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {} });
+      useChatStore.setState({ messages: [], claims: [], relations: [], discussions: {}, evidence: {}, evidenceCounts: {} });
       try {
         const res = await secureFetch(`${API_BASE}/messages/${conv.id}`, { method: 'DELETE' });
         if (!res.ok) {

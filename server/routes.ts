@@ -581,7 +581,13 @@ router.get('/messages/:conversationId/claims', requireAuth, async (req: Authenti
   try {
     const limit = parseInt(req.query.limit as string) || 30;
     const claims = await db.getClaims(req.params.conversationId, limit);
-    return res.status(200).json({ claims });
+    // The claims list badges each row with its evidence count; one aggregation
+    // beats a fetch per claim and skips the (large) evidence bodies entirely.
+    const evidenceCounts = await db.getEvidenceCounts(
+      req.params.conversationId,
+      claims.map((c) => c.id),
+    );
+    return res.status(200).json({ claims, evidenceCounts });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to retrieve room claims' });
   }
@@ -1223,9 +1229,15 @@ router.post('/messages/:conversationId/claims/:claimId/evidence', requireAuth, a
 
     const saved = await db.createEvidence(evidence);
 
+    // The claims list badges each row with its evidence count; send the
+    // authoritative post-add tally so every client agrees without having to
+    // refetch.
+    const counts = await db.getEvidenceCounts(ctx.conversation.id, [ctx.claim.id]);
+
     emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-added', {
       claimId: ctx.claim.id,
-      evidence: saved
+      evidence: saved,
+      evidenceCount: counts[ctx.claim.id] ?? 1
     });
 
     // A person put something real behind a claim — the pivot the whole gate
@@ -1291,9 +1303,14 @@ router.post('/messages/:conversationId/claims/:claimId/evidence/ai-reference', r
 
     const saved = await db.createEvidence(evidence);
 
+    // Same authoritative tally as a human attach, so the claim row's badge
+    // counts the AI reference too (the gate still won't weigh it as proof).
+    const counts = await db.getEvidenceCounts(ctx.conversation.id, [ctx.claim.id]);
+
     emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-added', {
       claimId: ctx.claim.id,
-      evidence: saved
+      evidence: saved,
+      evidenceCount: counts[ctx.claim.id] ?? 1
     });
 
     // Recorded, but flagged as model-generated: an AI reference is a lead, not
@@ -1341,9 +1358,14 @@ router.delete('/messages/:conversationId/claims/:claimId/evidence/:evidenceId', 
       return res.status(404).json({ error: 'Evidence not found on this claim' });
     }
 
+    // Send the post-deletion tally so claim-row badges settle on the same
+    // number everywhere, even on clients that never opened the evidence list.
+    const counts = await db.getEvidenceCounts(ctx.conversation.id, [ctx.claim.id]);
+
     emitDiscussionEvent(ctx.conversation.id, ctx.workspace.id, 'evidence-deleted', {
       claimId: ctx.claim.id,
-      evidenceId: req.params.evidenceId
+      evidenceId: req.params.evidenceId,
+      evidenceCount: counts[ctx.claim.id] ?? 0
     });
 
     // The removal is part of the story too — a room that took evidence back off

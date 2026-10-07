@@ -23,6 +23,8 @@ export interface ChatState {
    * lazily as a claim's or contradiction's detail view is opened.
    */
   evidence: Record<string, Evidence[]>;
+  /** Evidence count per claim, so the claims list can badge each row. */
+  evidenceCounts: Record<string, number>;
   /** This room's decisions, newest-first. */
   decisions: Decision[];
   /** The gate verdict for the decision the room is currently inspecting. */
@@ -72,6 +74,8 @@ export const useChatStore = create<ChatState>((set) => ({
   relations: [],
   discussions: {},
   evidence: {},
+  /** Evidence count per claim for the claims list, seeded with the claims. */
+  evidenceCounts: {} as Record<string, number>,
   /** This room's decisions, newest-first. */
   decisions: [],
   /** The gate verdict for the decision the room is currently inspecting. */

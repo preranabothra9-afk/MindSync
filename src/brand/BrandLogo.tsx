@@ -12,7 +12,7 @@ interface LogoProps {
   size?: number;
 }
 
-/** MindSync mark — the "M" icon symbol used across all logo variants */
+/** MindSync mark — the synapse node graph icon used across all logo variants */
 export function MindMark({ size = 36, className }: LogoProps) {
   return (
     <svg
@@ -26,8 +26,8 @@ export function MindMark({ size = 36, className }: LogoProps) {
     >
       <defs>
         <linearGradient id="ms-grad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#6366f1" />
-          <stop offset="50%" stopColor="#4f46e5" />
+          <stop offset="0%" stopColor="#818cf8" />
+          <stop offset="50%" stopColor="#6366f1" />
           <stop offset="100%" stopColor="#4338ca" />
         </linearGradient>
         <linearGradient id="ms-bg" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
@@ -37,19 +37,40 @@ export function MindMark({ size = 36, className }: LogoProps) {
       </defs>
       <rect width="36" height="36" rx="10" fill="url(#ms-bg)" />
       <rect width="36" height="36" rx="10" stroke="url(#ms-grad)" strokeWidth="0.75" opacity="0.4" />
-      {/* The "M" — two uprights joined by a central notch */}
-      <path d="M10 27 L10 9 L18 20 L26 9 L26 27" stroke="url(#ms-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      {/* Baseline tying the two uprights together */}
-      <path d="M10 27 L26 27" stroke="url(#ms-grad)" strokeWidth="1.4" strokeLinecap="round" opacity="0.5" />
-      {/* Sync oscillation — the double-wave ripple beneath the mark */}
-      <path d="M12.5 32 Q15.5 29.5 18 32 Q20.5 34.5 23.5 32" stroke="#6366f1" strokeWidth="1.2" strokeLinecap="round" fill="none" opacity="0.7" />
-      {/* Node highlights at the three peaks */}
-      <circle cx="18" cy="20" r="3" fill="url(#ms-grad)" />
-      <circle cx="10" cy="9" r="2.5" fill="#6366f1" />
-      <circle cx="26" cy="9" r="2.5" fill="#4338ca" />
-      <circle cx="18" cy="20" r="1.2" fill="white" opacity="0.95" />
-      <circle cx="10" cy="9" r="1" fill="white" opacity="0.85" />
-      <circle cx="26" cy="9" r="1" fill="white" opacity="0.85" />
+
+      {/* Spokes — the hub broadcasting to every satellite node */}
+      <g stroke="url(#ms-grad)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6">
+        <path d="M18 18 L18 8" />
+        <path d="M18 18 L26.7 13" />
+        <path d="M18 18 L26.7 23" />
+        <path d="M18 18 L18 28" />
+        <path d="M18 18 L9.3 23" />
+        <path d="M18 18 L9.3 13" />
+      </g>
+
+      {/* Ring — the network linking the satellites to each other */}
+      <g stroke="#6366f1" strokeWidth="1.05" strokeLinecap="round" opacity="0.3">
+        <path d="M18 8 L26.7 13" />
+        <path d="M26.7 13 L26.7 23" />
+        <path d="M26.7 23 L18 28" />
+        <path d="M18 28 L9.3 23" />
+        <path d="M9.3 23 L9.3 13" />
+        <path d="M9.3 13 L18 8" />
+      </g>
+
+      {/* The hub — the room's center of gravity */}
+      <circle cx="18" cy="18" r="4.2" fill="url(#ms-grad)" />
+      <circle cx="18" cy="18" r="1.3" fill="white" opacity="0.95" />
+
+      {/* Satellite nodes — the models, sized to feel organic rather than rigid */}
+      <circle cx="18" cy="8" r="2.6" fill="url(#ms-grad)" />
+      <circle cx="18" cy="8" r="1" fill="white" opacity="0.85" />
+      <circle cx="26.7" cy="13" r="1.9" fill="#6366f1" />
+      <circle cx="26.7" cy="23" r="2.3" fill="url(#ms-grad)" />
+      <circle cx="18" cy="28" r="2" fill="#4338ca" />
+      <circle cx="9.3" cy="23" r="2.5" fill="url(#ms-grad)" />
+      <circle cx="9.3" cy="23" r="0.9" fill="white" opacity="0.8" />
+      <circle cx="9.3" cy="13" r="1.8" fill="#6366f1" />
     </svg>
   );
 }

@@ -11,9 +11,9 @@ export interface ThemeMeta {
 }
 
 export const THEMES: ThemeMeta[] = [
-  { id: 'light',  name: 'Linen',    blurb: 'Warm paper, bright surfaces',  swatch: ['#faf9f7', '#ffffff', '#4f46e5'] },
-  { id: 'dark',   name: 'Obsidian', blurb: 'Cool near-black, crisp text',  swatch: ['#0a0b10', '#12141b', '#6366f1'] },
-  { id: 'nebula', name: 'Nebula',   blurb: 'Deep violet dusk, soft glow',  swatch: ['#151022', '#1e1733', '#8b7cf8'] },
+  { id: 'light',  name: 'Linen',    blurb: 'Cool paper, bright surfaces',  swatch: ['#f6f7fb', '#ffffff', '#4f46e5'] },
+  { id: 'dark',   name: 'Obsidian', blurb: 'Near-black slate, crisp text', swatch: ['#0e1017', '#161a24', '#818cf8'] },
+  { id: 'nebula', name: 'Nebula',   blurb: 'Deep violet dusk, soft glow',  swatch: ['#1a1830', '#241f3d', '#a78bfa'] },
 ];
 
 const THEME_KEY = 'mindsync-theme';

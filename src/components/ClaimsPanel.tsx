@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { useStore } from '../store';
+import { useChatStore } from '../stores/chatStore';
 import { Sparkles, CornerDownRight, Trash2, Zap, ArrowLeft, Send, X, ScrollText } from 'lucide-react';
 import type { Claim, DiscussionComment } from '../types';
 import Portal from '../hooks/Portal';
@@ -22,6 +23,9 @@ export default function ClaimsPanel() {
   const user = useStore((s) => s.user);
   const claims = useStore((s) => s.claims);
   const relations = useStore((s) => s.relations);
+  // Evidence counts per claim, so each row can show how many items back it
+  // without opening the detail view.
+  const evidenceCounts = useChatStore((s) => s.evidenceCounts);
   const jumpToMessage = useStore((s) => s.jumpToMessage);
   const deleteClaim = useStore((s) => s.deleteClaim);
   const clearClaims = useStore((s) => s.clearClaims);
@@ -447,16 +451,29 @@ export default function ClaimsPanel() {
                   </button>
 
                   {/* Per-claim evidence viewer (outside the jump button so
-                      nesting stays valid) */}
-                  <button
-                    type="button"
-                    onClick={() => setClaimDetailId(claim.id)}
-                    title="View and attach evidence for this claim"
-                    className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-semibold text-faint opacity-0 group-hover:opacity-100 hover:text-ember-soft hover:bg-ember/10 transition-all cursor-pointer"
-                  >
-                    <ScrollText size={10} />
-                    Evidence
-                  </button>
+                      nesting stays valid). When evidence is attached the count
+                      is shown on the row itself, not tucked into the detail
+                      view. */}
+                  {(() => {
+                    const evCount = evidenceCounts[claim.id] ?? 0;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setClaimDetailId(claim.id)}
+                        title={evCount > 0
+                          ? `${evCount} piece${evCount === 1 ? '' : 's'} of evidence attached — view and manage`
+                          : 'View and attach evidence for this claim'}
+                        className={`absolute bottom-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold transition-all cursor-pointer ${
+                          evCount > 0
+                            ? 'text-ember-soft bg-ember/15 border border-ember/40 hover:bg-ember/25 hover:border-ember/60'
+                            : 'text-faint opacity-0 group-hover:opacity-100 hover:text-ember-soft hover:bg-ember/10'
+                        }`}
+                      >
+                        <ScrollText size={10} />
+                        {evCount > 0 ? evCount : 'Evidence'}
+                      </button>
+                    );
+                  })()}
 
                   {/* Per-claim delete (outside the button so nesting stays valid) */}
                   <button
@@ -488,7 +505,7 @@ export default function ClaimsPanel() {
             {count > 0 && !detail && !claimDetail && (
               <div className="shrink-0 px-3 py-2 border-t border-line">
                 <p className="text-[10px] font-mono text-faint">
-                  {count} claim{count === 1 ? '' : 's'}{contradictions.length > 0 ? ` · ${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'}` : ''} — click to jump, hover to delete or open evidence
+                  {count} claim{count === 1 ? '' : 's'}{contradictions.length > 0 ? ` · ${contradictions.length} contradiction${contradictions.length === 1 ? '' : 's'}` : ''} — click to jump, hover to delete{Object.keys(evidenceCounts).length > 0 ? ' · the badge on a claim counts its evidence' : ''}
                 </p>
               </div>
             )}

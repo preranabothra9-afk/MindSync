@@ -98,6 +98,29 @@ describe('evidence adapter', () => {
     assert.deepEqual(await db.getEvidenceForClaims(CONV, []), {});
   });
 
+  test('getEvidenceCounts tallies evidence per claim in one round trip', async () => {
+    await seedClaim('c-count-a', 'Count A.');
+    await seedClaim('c-count-b', 'Count B.');
+    await seedClaim('c-count-c', 'Count C.');
+    await attach('c-count-a', 'url', 'A link');
+    await attach('c-count-a', 'quote', 'A quote');
+    await attach('c-count-b', 'user', 'B note');
+
+    const counts = await db.getEvidenceCounts(CONV, ['c-count-a', 'c-count-b', 'c-count-c']);
+    assert.equal(counts['c-count-a'], 2);
+    assert.equal(counts['c-count-b'], 1);
+    // Claims with no evidence are absent from the map; callers read absence as 0.
+    assert.equal(counts['c-count-c'], undefined);
+  });
+
+  test('getEvidenceCounts scopes to its room and handles no claim ids', async () => {
+    await seedClaim('c-count-scope', 'Scoped count.');
+    await attach('c-count-scope', 'url', 'Room evidence');
+
+    assert.deepEqual(await db.getEvidenceCounts(CONV, []), {});
+    assert.deepEqual(await db.getEvidenceCounts('conv-other', ['c-count-scope']), {});
+  });
+
   test('scopes evidence to its room', async () => {
     await seedClaim('c-scope', 'Scoped.');
     await attach('c-scope', 'url', 'Room evidence');
