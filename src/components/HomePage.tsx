@@ -343,7 +343,7 @@ export default function HomePage() {
           {/* Evidence gate callout */}
           <Reveal className="mt-6">
             <div className="border-glow glass-strong rounded-3xl p-8 sm:p-10 flex flex-col md:flex-row items-start gap-6">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-ember to-ember-2 text-on-ember flex items-center justify-center shrink-0 shadow-lg shadow-ember/20">
+              <div className="w-12 h-12 rounded-xl bg-linear-to-br from-ember to-ember-2 text-on-ember flex items-center justify-center shrink-0 shadow-lg shadow-ember/20">
                 <Gavel size={22} />
               </div>
               <div>
