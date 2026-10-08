@@ -8,6 +8,8 @@
 [![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-4.0-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![Tests](https://img.shields.io/badge/Tests-83_passing-22c55e?style=for-the-badge)](#-testing)
 
+**[🌐 Live demo → collabz-spgf.onrender.com](https://collabz-spgf.onrender.com)** — deployed on [Render](https://render.com) with MongoDB Atlas behind it. Register an account and confirm it by email to get started.
+
 MindSync is a production-grade, real-time platform where teams collaborate with AI rather than just prompt it. Multiple models answer the same prompt side by side, the room mines durable **claims** from their answers, a detector flags **contradictions** between them, and people attach **evidence** and record **decisions** that a server-side **evidence gate** refuses to finalize until every claim is backed by something a human stood behind.
 
 Everything runs on one origin — the Node/Express server hosts Socket.IO and serves the Vite app as middleware in development, so there is no second port or proxy to configure.
@@ -17,6 +19,7 @@ Everything runs on one origin — the Node/Express server hosts Socket.IO and se
 ## Table of Contents
 
 - [What MindSync is for](#-what-mindsync-is-for)
+- [Live demo](#-live-demo)
 - [Feature tour](#-feature-tour)
 - [The decision pipeline](#-the-decision-pipeline)
 - [Tech stack](#-tech-stack)
@@ -47,6 +50,18 @@ Generative AI tools are single-player: one person, one prompt, one model, and an
 - Decisions are recorded with the claims and evidence behind them, and a finalization **gate** enforces that no decision is locked until its claims are actually backed by human evidence and its required approvals are in.
 
 The throughline: **AI advises, humans decide.** Every closing action — resolving a contradiction, finalizing a decision, dismissing an objection — requires an authorized person.
+
+---
+
+## 🌐 Live demo
+
+**[collabz-spgf.onrender.com](https://collabz-spgf.onrender.com)** — the platform is deployed on **Render**, with MongoDB Atlas behind it.
+
+The deployed build is the same single server described in [Architecture](#-architecture): one Node service hosting Express, Socket.IO, and the built React client, so the app, the API and the realtime layer all share one origin. Render's free tier spins the service down after inactivity, so the first request after a quiet period takes ~30–60s to wake — subsequent loads are fast.
+
+**Trying it out:** register an account and confirm it via the emailed link (Brevo is configured on the deployment, so the link arrives in your inbox). Then sign in and create a workspace — bring a second browser or a colleague along to see presence, invitation requests and shared prompting in action.
+
+> ⚠️ **Admin credentials** are set by each deployment's own `ADMIN_*` environment variables (see [Environment variables](#-environment-variables)), so a README can't list the live instance's password. For a **local** clone using the `.env.example` defaults, that's `admin@synapse.ai` / `Password@123`. If you need admin access to the live demo, ask whoever deployed it.
 
 ---
 
@@ -441,20 +456,22 @@ The suite pins the contracts that are easy to regress:
 
 ## 🚢 Deployment
 
-The build produces both artifacts in one command — the client bundle via Vite and the server via esbuild to `dist/server.cjs`.
+The live platform runs on **Render** — [collabz-spgf.onrender.com](https://collabz-spgf.onrender.com) — a single Node web service fronting MongoDB Atlas. The build produces both artifacts in one command: the client bundle via Vite and the server via esbuild to `dist/server.cjs`.
 
-**Render / Railway (or any Node host)**
+**Render (this is how the live demo is hosted)**
 
-1. Connect the repo. Set the runtime to **Node 22**.
+1. Create a **Web Service** and connect this repo. Runtime: **Node 22**.
 2. **Build command:** `npm run build` · **Start command:** `npm run start`
-3. Set environment variables — at minimum `MONGODB_URI`, the `JWT_*` secrets, `CLIENT_URL`, your model keys, and `ADMIN_*`. For email, add the `BREVO_*` (plus a verified `MAIL_FROM_ADDRESS`) or `RESEND_*` block.
-4. Ensure the host allows outbound SMTP (port 2525) if using Brevo — many cloud hosts block 465/587, which is exactly why Brevo's relay port is the default.
+3. Set environment variables — at minimum `MONGODB_URI`, the `JWT_*` secrets, `CLIENT_URL` (your Render URL), your model keys, and `ADMIN_*`. For email, add the `BREVO_*` block plus a verified `MAIL_FROM_ADDRESS` — that is what the live demo uses, over port 2525.
+4. Leave the port to Render's `PORT` — the server binds it dynamically (`server.listen(PORT, '0.0.0.0')`).
 
-**MongoDB Atlas** — free M0 tier is sufficient. Add a database user, whitelist the host's egress IPs (or `0.0.0.0/0` for dynamic cloud hosts), and put the connection string in `MONGODB_URI`.
+> **Free-tier note:** Render's free plan sleeps the service after ~15 min of inactivity, so the first visitor after a quiet stretch waits for a cold start (~30–60s). Every later load is fast. WebSockets drop during the spin-down, which is exactly the case the [stream watchdog](#-realtime-engine) self-heals from.
+
+**MongoDB Atlas** — free M0 tier is sufficient. Add a database user, whitelist the host's egress IPs (or `0.0.0.0/0` for dynamic cloud hosts like Render), and put the connection string in `MONGODB_URI`.
 
 **Static client** — not required. The server serves the built client itself with an SPA fallback, so a single service hosts everything. To split it, point a CDN at `dist/` and set `CLIENT_URL` to its origin.
 
-**Production checklist:** `NODE_ENV=production` · `CLIENT_URL` = your frontend origin · HTTPS/WSS end to end (required for the `Secure` + `SameSite=None` refresh cookie) · rotate the default `JWT_*` secrets · confirm your Brevo sender address is verified.
+**Production checklist:** `NODE_ENV=production` · `CLIENT_URL` = your Render origin · HTTPS/WSS end to end (required for the `Secure` + `SameSite=None` refresh cookie) · rotate the default `JWT_*` secrets · confirm your Brevo sender address is verified.
 
 ---
 
