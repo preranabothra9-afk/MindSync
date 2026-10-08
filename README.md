@@ -5,461 +5,469 @@
 [![NodeJS](https://img.shields.io/badge/Node.js-22.x-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 [![Socket.io](https://img.shields.io/badge/Socket.io-4.8-010101?style=for-the-badge&logo=socketdotio&logoColor=white)](https://socket.io/)
-[![Gemini](https://img.shields.io/badge/Gemini_AI-3.5_Flash-0091FF?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-4.0-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![JWT](https://img.shields.io/badge/Security-JWT_HttpOnly-FF007F?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
-[![RBAC](https://img.shields.io/badge/Control-RBAC_Enterprise-orange?style=for-the-badge)](https://en.wikipedia.org/wiki/Role-based_access_control)
+[![Tests](https://img.shields.io/badge/Tests-83_passing-22c55e?style=for-the-badge)](#-testing)
 
-MindSync is a production-grade, real-time MERN SaaS platform that redefines how teams interact with Artificial Intelligence. Rather than restricting prompting to an isolated, single-user window, MindSync introduces a high-performance **multiplayer workspace** where product managers, software engineers, and researchers can collaboratively refine prompts, stream comparative responses from Google Gemini and other simulated LLMs simultaneously, track administrative telemetry, and audit workspace security.
+MindSync is a production-grade, real-time platform where teams collaborate with AI rather than just prompt it. Multiple models answer the same prompt side by side, the room mines durable **claims** from their answers, a detector flags **contradictions** between them, and people attach **evidence** and record **decisions** that a server-side **evidence gate** refuses to finalize until every claim is backed by something a human stood behind.
 
----
-
-## 🚀 2. Project Overview
-
-MindSync is an enterprise-grade solution designed to eliminate the single-user silos in modern generative AI tools. By shifting prompting into a real-time collaborative workspace, teams can build better prompt pipelines together. 
-
-### Core Value Pillars:
-*   **Real-Time AI Collaboration:** Low-latency multiplayer rooms powered by WebSockets ensure that when one user edits a prompt or alters configurations, the entire team witnesses the changes instantly.
-*   **Multi-Model Streaming:** Parallel asynchronous pipelines dispatch prompting payloads to multiple language models (featuring live native streaming from the Gemini API) and render responses side-by-side.
-*   **Collaborative Workspaces:** Multi-tenant environments structured around private, invite-only boundaries where conversations and prompts are isolated.
-*   **Admin Analytics & RBAC:** A specialized command center for operations teams to monitor platform health, manage user permissions, and suspend accounts in real time.
-*   **AI Comparison Workflows:** Side-by-side interface metrics comparing prompt duration, token throughput rendering, and markdown accuracy across models to identify optimal prompt strategies.
+Everything runs on one origin — the Node/Express server hosts Socket.IO and serves the Vite app as middleware in development, so there is no second port or proxy to configure.
 
 ---
 
-## ✨ 3. Core Features
+## Table of Contents
 
-### 👥 Realtime Collaboration
-*   **Collaborative Rooms:** Multiplayer workspaces bound to specific channel routing. Users join dedicated room namespaces securely.
-*   **Live Presence:** Real-time visual representation of active team members working in the workspace, complete with color-coded cursors.
-*   **Typing Indicators:** Real-time visual indicators displaying who is currently editing prompt boxes or typing responses, eliminating input conflicts.
-*   **Workspace Invites:** Cryptographically secure workspace invitations that allow owners to securely add collaborators to their prompt engineering rooms.
-*   **Synchronized Updates:** Bidirectional socket updates that instantly mirror prompt text changes, model selections, and conversational threads across all active screens.
-
-### 🤖 AI Features
-*   **Gemini Streaming:** Native integrations with the `@google/genai` library to stream token responses from `gemini-3.5-flash` with zero buffering.
-*   **Multi-Model Comparison:** Parallel comparative layout rendering streaming responses from multiple models simultaneously, complete with diagnostic shimmers.
-*   **Markdown Rendering:** Advanced frontend parsing of incoming chunk packets into stylized HTML, with full support for tables, blockquotes, and nested syntax highlighting.
-*   **Prompt Workflows:** Versioned, structured conversation streams enabling teams to save prompt templates, run variables, and iterate on prompt structures.
-*   **AI Response Persistence:** A persistent bookmark library that permits teams to pin exceptional model completions directly to the workspace dashboard.
-
-### 🛡️ Admin System
-*   **Admin Dashboard:** A unified platform operations panel for systems administrators to review telemetry and user metrics.
-*   **Analytics:** Recharts-powered graphs monitoring daily active users, total database usage, API request count, and AI query response latencies.
-*   **Audit Logs:** A forensic log audit trail capturing authentication events, user status modifications, workspace creations, and role updates, complete with IP tracking.
-*   **User Management:** Administrative options to modify roles (user/admin), promote members, or search system registers.
-*   **Role-Based Access Control (RBAC):** Strict software checks restricting administrative routes and API operations exclusively to validated admins.
-*   **Workspace Moderation:** Global oversight tools enabling administrators to audit active channels, delete workspace instances, and moderate user content.
-
-### 🔒 Security Features
-*   **JWT Auth:** Stateless user verification utilizing short-lived JSON Web Tokens passed in secure Authorization headers.
-*   **Access + Refresh Tokens:** Dual-token structure to maintain security posture while sustaining active, uninterrupted user sessions.
-*   **HttpOnly Cookies:** Storing critical refresh tokens in `HttpOnly`, `Secure`, `SameSite: None` cookies to prevent client-side script interception (XSS protection).
-*   **Helmet:** Secure HTTP headers configured to prevent clickjacking, MIME-sniffing, and cross-site scripting vulnerabilities.
-*   **Rate Limiting:** Throttling algorithms (`express-rate-limit`) preventing API abuse globally, with strict rate limits on authentication routes (`/api/auth/login`, `/api/auth/register`).
-*   **Socket Authentication:** Web socket connection verification using handshakes to validate JWT signatures before opening socket tunnels.
-*   **Protected Routes:** React and Express router guards restricting resource access based on authentication status and user roles.
-
-### ⚙️ SaaS Engineering Features
-*   **MongoDB Architecture:** Optimized document-based data modeling with virtual parameters, custom schemas, and compound index performance mappings.
-*   **Zustand State Management:** A unified slice-based frontend state aggregator handling asynchronous auth loops, socket connections, and reactive UI boundaries.
-*   **React Query:** In-app state hydration, caching, and background synchronization for RESTful API requests, preventing duplicate network requests.
-*   **Socket.IO:** Real-time event communication channel using room bindings and custom event dispatch queues.
-*   **Scalable Architecture:** Structured modular codebase separating business routing logic, validation layers, real-time socket events, and database models.
-*   **Responsive UI:** A premium Tailwind-engineered interface implementing fluid grid layouts, dark mode glassmorphism, and responsive transitions.
+- [What MindSync is for](#-what-mindsync-is-for)
+- [Feature tour](#-feature-tour)
+- [The decision pipeline](#-the-decision-pipeline)
+- [Tech stack](#-tech-stack)
+- [Architecture](#-architecture)
+- [Getting started](#-getting-started)
+- [Environment variables](#-environment-variables)
+- [Auth, verification & sessions](#-auth-verification--sessions)
+- [Workspaces, invitations & leaving](#-workspaces-invitations--leaving)
+- [Realtime engine](#-realtime-engine)
+- [AI models & streaming](#-ai-models--streaming)
+- [Admin & telemetry](#-admin--telemetry)
+- [Brand & theming](#-brand--theming)
+- [Security](#-security)
+- [Testing](#-testing)
+- [Deployment](#-deployment)
+- [Roadmap](#-roadmap)
+- [License](#-license)
 
 ---
 
-## 🛠️ 4. Tech Stack
+## 🎯 What MindSync is for
 
-### Frontend Layer
-*   **React 19:** View rendering engine supporting concurrent layouts.
-*   **TypeScript 5.8:** Strict type definitions across UI layouts and state stores.
-*   **Vite 6:** Rapid frontend builder running Hot Module Replacement.
-*   **Tailwind CSS 4.0:** Dynamic custom utility styling engine with glassmorphic variables.
-*   **Zustand 5.0:** Fast state store handling reactive client synchronization.
-*   **React Query (TanStack):** High-fidelity data caching, request synchronization, and server mutation.
-*   **Framer Motion:** Micro-animations, modal transitions, and dynamic card streams.
-*   **Socket.IO Client:** Low-latency client websocket wrapper linking to the server.
+Generative AI tools are single-player: one person, one prompt, one model, and an answer that evaporates. MindSync turns prompting into a **shared, persistent workspace** where:
 
-### Backend Layer
-*   **Node.js 22:** Performance-oriented asynchronous event-driven JavaScript server environment.
-*   **Express 4.21:** Lightweight HTTP router serving REST endpoints.
-*   **MongoDB:** Document-oriented database cluster.
-*   **Mongoose 9.6:** Object Data Modeling (ODM) layer executing strict database schemas.
-*   **Socket.IO:** Real-time network orchestrator.
-*   **JWT (jsonwebtoken):** Secure cryptographic tokens for authorization.
-*   **Zod 4.4:** Direct runtime validation for API schemas.
-*   **Gemini API (@google/genai):** LLM integration to handle real-time streaming tokens.
+- A team prompts **several models at once** and compares answers side by side, live, as tokens arrive.
+- The room keeps a **memory** — meaningful statements are mined into claims that are injected into the next prompt, so models stay consistent with the ongoing discussion instead of treating each prompt in a vacuum.
+- Disagreements between models surface as **contradictions** the room must face, discuss, and close with a written resolution — never auto-resolved by a model.
+- Decisions are recorded with the claims and evidence behind them, and a finalization **gate** enforces that no decision is locked until its claims are actually backed by human evidence and its required approvals are in.
 
-### Infrastructure & Operations
-*   **Vercel:** Optimized edge hosting for static single-page React assets.
-*   **Render / Railway:** High-availability server deployments executing continuous integration.
-*   **MongoDB Atlas:** Distributed cloud database manager.
+The throughline: **AI advises, humans decide.** Every closing action — resolving a contradiction, finalizing a decision, dismissing an objection — requires an authorized person.
 
 ---
 
-## 📊 5. System Architecture
+## ✨ Feature tour
 
-MindSync organizes workflows across distinct system layers, maintaining separate boundaries for data storage, real-time messaging, and application execution:
+### Multi-model comparison
+- **Parallel streaming** from Google Gemini, Groq, Mistral and NVIDIA-hosted models, rendered side-by-side with per-model timing and status.
+- **Seven registered models**, three selected by default — a working comparison needs just two free API keys (Google AI Studio + Groq).
+- **Rich markdown** rendering of streamed chunks, with code highlighting, tables and blockquotes.
+- **Per-model failure isolation** — a missing key or a rate limit degrades one card, not the room; Gemini falls back through a model cascade and, on a total outage, a clearly-labelled offline response so the workspace never freezes.
 
-```
-+-----------------------------------------------------------------------------+
-|                               FRONTEND LAYER                                |
-|  [React 19 App] -- (Zustand State Engine) -- (React Query / Axios Client)     |
-|         |                                           |                       |
-|         | (Socket.IO Connection)                    | (REST API Calls)      |
-+---------+-------------------------------------------+-----------------------+
-          |                                           |
-          v                                           v
-+-----------------------------------------------------------------------------+
-|                                BACKEND LAYER                                |
-|                        [Unified Express HTTP Server]                        |
-|                                                                             |
-|   +-----------------------+                       +---------------------+   |
-|   |     SOCKET LAYER      |                       |    AUTH & ROUTING   |   |
-|   | • Handshake JWT Auth  |                       | • Rate Limit Guards |   |
-|   | • Room Isolation      |                       | • Zod Validation    |   |
-|   | • Presence Tracking   |                       | • Helmet HTTP Sec   |   |
-|   +-----------+-----------+                       +----------+----------+   |
-|               |                                              |              |
-+---------------+----------------------------------------------+--------------+
-                |                                              |
-                v                                              v
-+-----------------------------------------------------------------------------+
-|                            EXTERNAL & PERSISTENCE                           |
-|                                                                             |
-|   +-------------------------------+      +------------------------------+   |
-|   |     MongoDB Persistence       |      |    AI STREAMING FLOW         |   |
-|   | • User, Messages Schemas      |      | • @google/genai Client       |   |
-|   | • Admin Analytics Pipeline    |      | • Parallel Gemini Streams    |   |
-|   +-------------------------------+      +------------------------------+   |
-+-----------------------------------------------------------------------------+
+### Collaboration
+- **Live presence, typing indicators and shared prompt editing** over workspace-scoped socket rooms.
+- **Always-on member roster** — the sidebar shows every workspace member by name with online / offline / active status, not just live sockets. Offline members get name-derived initial avatars; online members sort first.
+- **Synchronized everything** — prompt text, model picks, messages, claims, evidence and decisions all broadcast to every member as they happen.
+
+### The record layer
+- **Claims** mined automatically from finished answers, each attributed to its source model and fed back into subsequent prompts.
+- **Contradictions** detected between claims, each with a threaded discussion, replies, a room poll, and human-only resolve / dismiss.
+- **Evidence** — links, files, quotes and notes — attached to any claim, with an optional AI reference generator that is always badged *unverified* and never counts as proof.
+- **Per-claim evidence counts** shown directly on each claim row, so you can see what is backed without opening it.
+- **Decisions** with linked claims, required approvers, an append-only history, a **scrubbable replay** that reconstructs the gate at every step, and an AI **summary** that is only ever a restatement of the record.
+
+### Trust & governance
+- **Email verification** before first login, with a 24-hour link and a "verify your email first" notice that re-issues the link for you.
+- **Invitations as requests** — you invite, the recipient accepts or declines; nobody is added against their will, and five declines to one workspace locks it out.
+- **Leaving with ownership transfer** — members leave freely; an owner hands the room to a successor first, and a sole owner is told to delete instead.
+- **Audit logs** capturing auth events, role changes, blocks, workspace and decision lifecycle, with IP tracking.
+
+### Admin
+- **Diagnostic console, collaborator accounts, workspace oversight, AI telemetry, audit trail and health** tabs in a full admin panel.
+- **Recharts dashboards** for DAU, workspaces, AI queries, response latency, model popularity and system load.
+- **User management** — search, filter, block / unblock (which revokes live sessions), role elevation, manual email verification, and hard delete.
+
+---
+
+## 🧭 The decision pipeline
+
+This is the heart of MindSync. Each room accumulates a record the team can later hold a decision against.
+
+```text
+prompt ──▶ models stream answers in parallel
+              │
+              ├─▶ answers persisted ──▶ claims mined (attributed per model)
+              │                              │
+              │                              ├─▶ claims injected into the NEXT prompt
+              │                              │      (the room's persistent memory)
+              │                              │
+              │                              └─▶ contradiction detector compares
+              │                                     new claims vs existing ones
+              │                                        │
+              │                                        ▼
+              │                              CONTRADICT edge (status: detected)
+              │                                        │
+              │                                        ▼
+              │                          threaded discussion + room poll
+              │                                        │
+              │                                        ▼
+              │                          HUMAN closes it: resolved /
+              │                          evidence-needed / dismissed
+              │                                        │
+   attach evidence ────────────────────────▶ claims become "backed"
+   (link, file, quote, note)                     │
+                                                 ▼
+                                         draft a decision
+                                         link its claims, name approvers
+                                                 │
+                                                 ▼
+                                     ┌────────────────────────┐
+                                     │   THE EVIDENCE GATE    │   enforced server-side
+                                     │  every claim backed    │   on every finalize
+                                     │  no open contradictions │
+                                     │  all approvals given   │
+                                     └────────────────────────┘
+                                                 │
+                                                 ▼
+                                         finalized + replayable
+                                         (scrub back to any moment
+                                          and see the gate rebuild)
 ```
 
-### Architectural Stream & Storage Pipeline
-1.  **Frontend Layer:** The React single-page application binds components to Zustand store events. React Query handles cache invalidations and aggregates remote REST API states.
-2.  **Backend Layer:** The Node server runs Express routes and hooks into a unified HTTP server hosting the Socket.IO engine on port `3000`.
-3.  **Socket Layer:** Manages room boundaries based on workspace parameters (`workspace:${workspaceId}`) and coordinates typing, prompt edits, and active presence.
-4.  **Auth & Routing:** Implements global rate limit configurations and validates incoming client tokens.
-5.  **AI Streaming Flow:** Bypasses conventional blocking REST channels. The backend initiates concurrent socket events that stream raw tokens from the Gemini API back to the UI in parallel chunks.
-6.  **MongoDB Persistence:** Serves as the primary source of truth. Features indexing on key database fields (`email`, `workspaceId`, `conversationId`) and schedules background aggregation operations for the admin analytics pipeline.
+### The evidence gate, exactly
+
+A decision finalizes only when all four conditions hold — evaluated against the database on every attempt, never in the client (`server/routes.ts` finalize route):
+
+1. **It states what it rests on** — at least one claim from the room is linked.
+2. **Every linked claim is backed** — it carries human evidence, *or* it was cleared by an explicit human resolution of a contradiction it was part of.
+3. **No open contradictions remain** among the linked claims — a `detected` edge is an unresolved disagreement the room has not faced yet.
+4. **Every required approval is recorded.**
+
+**AI-generated evidence deliberately does not count.** A model's citation is its own reading of a response it wrote — models hallucinate sources, and the whole point of the gate is to stop a decision resting on a model's say-so. An AI reference is a lead to check, not evidence the gate accepts. It is stored, displayed and replayed, but badged *unverified* and excluded from the count.
+
+If the gate is not satisfied, finalize returns **409 with the blockers** — complete sentences naming the specific claims, contradictions and approvers still outstanding. A request that bypasses the UI (curl, a tampered button) is refused identically.
+
+### The replay
+
+Every event — prompt, claim mined, contradiction detected, evidence attached, vote cast, approval given — is recorded to a timeline. The decision replay scrubs through it and **reconstructs** the gate at each step, so you can see exactly when the room *could* have finalized and what was still outstanding. The gate shown is recomputed from the same rules rather than stored, so it can never disagree with the record.
 
 ---
 
-## 🔐 6. Authentication Flow
+## 🛠️ Tech Stack
 
-MindSync features a secure authentication architecture leveraging dual-token rotation, cross-site scripting (XSS) defenses, and strict access controls.
+**Frontend**
+- React 19 · TypeScript 5.8 · Vite 6 · Tailwind CSS 4
+- Zustand (split stores: auth, workspace, chat, UI)
+- Motion · lucide-react · recharts · react-markdown
 
-```
-Client App (Zustand)           Express API Gateway               Database (MongoDB)
-   │                                  │                                  │
-   ├────────── POST /login ──────────>│                                  │
-   │        (Credentials Payload)     ├──────── getUserByEmail() ───────>│
-   │                                  │<─────── User Record & Hash ──────┤
-   │                                  │                                  │
-   │                                  ├─ Verify Cryptographic Hash       │
-   │                                  ├─ Sign Access Token (15m)         │
-   │                                  ├─ Sign Rotated Refresh (7d)       │
-   │                                  ├──────── Save Refresh Token ─────>│
-   │                                  │                                  │
-   │<────── Access Token (Headers) ───┤                                  │
-   │<────── Rotated Refresh (Cookie) ─┤ (HttpOnly, Secure, SameSite: None)
-```
+**Backend**
+- Node 22 · Express 4.21 · Socket.IO 4.8
+- MongoDB + Mongoose 9.6 · JWT (access + rotating refresh) · Zod · bcrypt
+- `@google/genai` (native SDK streaming) · OpenAI-compatible SSE for Groq / Mistral / NVIDIA
 
-### Token Engineering Matrix
-*   **Access Token:** Encrypted using `JWT_ACCESS_SECRET` with an expiration window of 15 minutes. This token is stored in-memory by the frontend client application and attached to Axios request headers as a Bearer authorization token.
-*   **Refresh Token:** Encrypted using `JWT_REFRESH_SECRET` with an expiration window of 7 days. Stored inside a secure cookie parameter under `HttpOnly`, `Secure`, and `SameSite: None` settings.
-*   **HttpOnly Cookies:** Prevents dynamic browser scripts from querying or retrieving the token payload, eliminating token capture from malicious XSS vectors.
-*   **JWT Validation:** Middleware checks the validity and expiration of incoming header tokens before executing API routes.
-*   **RBAC System:** Validates user claims (`user.role === 'admin'`) before allowing configuration updates or administrative portal entry.
-*   **Socket Authentication:** The WebSocket server executes token verification on incoming handshakes:
-    ```typescript
-    const decoded = jwt.verify(token, getJwtSecret()) as { id: string; role: string };
-    const user = await db.getUserById(decoded.id);
-    if (!user || user.blocked) return next(new Error("Unauthorized"));
-    socket.data = { user };
-    ```
+**Tooling**
+- `tsc --noEmit` as the lint gate · Node's built-in test runner (83 tests) · esbuild for the server bundle
 
 ---
 
-## 📡 7. Realtime Engine
+## 🏗️ Architecture
 
-The real-time workspace runs on a customized **Socket.IO synchronization layer** designed for heavy collaborative environments.
-
-```
-Collaborator A                   Socket Sync Server                 Collaborator B
-   │                                     │                                 │
-   ├─────── join-workspace ─────────────>│                                 │
-   │        (workspaceId)                ├─────── join-workspace ─────────>│
-   │                                     │        (workspaceId)            │
-   ├─────── prompt-text-change ─────────>│                                 │
-   │        (Shared Prompt Content)      ├─────── prompt-text-sync ───────>│
-   │                                     │        (Prompt Content Sync)    │
-   ├─────── user-typing-start ──────────>│                                 │
-   │                                     ├─────── user-typing ────────────>│
-   │                                     │        (A is typing...)         │
-```
-
-### Real-Time Pipeline Specs
-*   **Socket.IO Architecture:** Operates over web socket tunnels, falling back to long polling in restricted network environments.
-*   **Room Isolation:** Dynamic room mapping isolates clients by assigning them to a unique room string: `workspace:${workspaceId}`. The socket server ensures no packets cross room boundaries.
-*   **Live Synchronization:** Real-time prompt changes and canvas operations are transmitted using debounced event broadcasts, keeping collaborative screens updated.
-*   **Collaborative Updates:** Bidirectional updates allow prompt configurations and AI model lists to update globally without requiring manual browser refreshes.
-*   **Typing Indicators:** Broadcasts active state parameters (`user-typing-start`, `user-typing-stop`) to render inline visual indicators on collaborator screens.
-*   **Reconnect Flow:** Integrated client-side logic to handle connection losses. Upon reconnection, the client automatically requests a handshake update, re-authenticates the socket session, and re-joins active workspace rooms.
-
----
-
-## 📊 8. Admin Panel
-
-The administrative panel provides a centralized interface for monitoring platform usage, reviewing security logs, and managing platform access:
-
-```
-+--------------------------------------------------------------------------------+
-|                             ADMIN COMMAND CENTER                               |
-+--------------------------------------------------------------------------------+
-|  [Telemetry Board]                 [Workspace Monitoring]   [User Management]  |
-|  • Active User Metries             • Audit Active Channels  • Promote Roles    |
-|  • DB Document Registry            • Channel Moderation     • Account Blocks   |
-|  • AI Query Latency Graphs         • Purge Sandboxes        • Active Session   |
-|                                                                                |
-|  [Audit Logging / SIEM]                                                        |
-|  • Tracks Auth Attempts, Role Elevations, IP Records                           |
-+--------------------------------------------------------------------------------+
+```text
++---------------------------------------------------------------------------+
+|                              BROWSER (one origin)                         |
+|  React 19 ── Zustand stores ─── secureFetch (Bearer + 401 refresh/retry)  |
+|      │                                                                    |
+|      ├── Socket.IO client ──────────────► /api REST ────────────────┐     |
++----------------------------------------------------------------------|-----+
+                                                                       |  trust proxy
++----------------------------------------------------------------------|-----+
+|                    SINGLE HTTP SERVER  (server.ts, port 3000)         |     |
+|   Express ─ helmet, cors, cookie-parser, rate limiters, /api router  |◄----+
+|      │                                                               |
+|      ├── dev:  Vite mounted AS middleware (HMR, same origin)         |
+|      ├── prod: express.static(dist) + SPA fallback                   |
+|      │                                                               |
+|      └── Socket.IO engine (handshake JWT auth)                       |
+|             ├─ workspace:<id> rooms (membership re-checked on join)  |
+|             ├─ user:<id> personal rooms (targeted invitation events) |
+|             └─ in-memory presence, model stream fan-out              |
++----------------------------------+-----------------------------------+
+                                   |
++----------------------------------v-----------------------------------+
+|                              MongoDB                                 |
+|  users · workspaces · conversations · messages · claims · relations   |
+|  invitations · evidence · decisions · timeline events · audit logs    |
++----------------------------------------------------------------------+
 ```
 
-### Operations Features:
-*   **Analytics Dashboard:** Displays system health, active database connections, daily API operations, and prompt latencies.
-*   **User Management:** Offers search features to review user attributes, change account levels (`user`/`admin`), and suspend active accounts.
-*   **Workspace Monitoring:** Monitors workspace creations, monitors active channels, and provides global tools to delete workspaces when necessary.
-*   **Audit Logging:** Tracks and records system events (failed auth, user registrations, role adjustments) in an audit database schema (`AuditLogModel`) with IP tracking.
-*   **AI Monitoring:** Measures LLM execution, tracking streaming performance, token processing times, and endpoint errors.
-*   **RBAC System:** Limits platform settings, server database seeds, and operational metrics exclusively to accounts verified as `admin`.
+Notable architectural decisions:
+
+- **One server, one port.** Socket.IO attaches to the same `http.Server` as Express. In development `npm run dev` runs `tsx server.ts`, which mounts Vite in middleware mode — so the client, API and sockets all share `http://localhost:3000` with **no proxy configuration**.
+- **Server-authored counts.** Evidence counts per claim are computed by the server and delivered both with the claims fetch and on every socket add/delete — the client never increments, so a local action and its socket echo can't double-count.
+- **Terminal-state-only reconciliation.** While a model is still streaming, its stored document is empty — so the stream watchdog only overwrites a card when the server reports a *terminal* status, and otherwise re-arms the quiet window and lets live chunks keep coming.
 
 ---
 
-## 🖼️ 9. Screenshots Section
+## 🚀 Getting started
 
-### Auth Portal & Login Page
-![Login Page](assets/login_page.png)
-*Figure 9.1: Glassmorphic auth gateway implementing dual-token access validation, secure cookie transport, and automated rate-limiting protectors.*
+**Prerequisites:** Node 22+ and a MongoDB instance (Atlas free tier is fine).
 
-### User Workspace
-![User Workspace](assets/user_workspace.png)
-*Figure 9.2: Multiplayer collaborative workspace showcasing live prompt refinement channels, dynamic editor sync, and active session listings.*
+```bash
+# 1. Clone
+git clone https://github.com/preranabothra9-afk/MindSync.git
+cd MindSync/synapseai-realtime-platform
 
-### AI Comparison
-![AI Comparison](assets/ai_comparison.png)
-*Figure 9.3: Asynchronous parallel streaming container illustrating comparative Gemini token delivery, rich markdown structures, and timing diagnostics.*
+# 2. Install
+npm install
 
-### Collaborative Rooms
-![Collaborative Rooms](assets/user_workspace.png)
-*Figure 9.4: Multi-tenant room isolation boundaries mapping active user channels, presence avatars, and typing triggers.*
+# 3. Configure
+cp .env.example .env
+#   → set GEMINI_API_KEY and GROQ_API_KEY (both free, no credit card)
+#   → set MONGODB_URI, or leave it blank for local JSON persistence
+#   → set the ADMIN_* seed credentials
 
-### Admin Dashboard
-![Admin Dashboard](assets/admin_dashboard.png)
-*Figure 9.5: Systems Control Panel displaying user suspension operations, dynamic RBAC overrides, and active workspace governance models.*
-
-### Analytics
-![Analytics](assets/admin_dashboard.png)
-*Figure 9.6: High-fidelity telemetry metrics utilizing Recharts models to visualize daily client logs, network traffic spikes, and LLM throughput latency.*
-
-### Audit Logs
-![Audit Logs](assets/admin_dashboard.png)
-*Figure 9.7: Forensic database activity ledger tracing authentication requests, status updates, and security details alongside client IP signatures.*
-
----
-
-## ⚙️ 10. Installation Guide
-
-### Frontend Client Setup
-1.  Navigate to your terminal and clone the repository.
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-3.  Launch the integrated development environment:
-    ```bash
-    npm run dev
-    ```
-
-### Backend Server Setup
-The backend runs in tandem with the frontend using the unified server launch configuration.
-1.  Verify that your local or cloud MongoDB instances are running.
-2.  Configure your local `.env` variables (as detailed in Section 12).
-3.  Launch the backend and compilation pipeline:
-    ```bash
-    npm run dev
-    ```
-The server will initialize on port `3000`. Point your browser to `http://localhost:3000`.
-
----
-
-## 📄 11. Environment Variables
-
-### Frontend Variables
-Create a local `.env` file in the frontend build folder (or inject them via your Vercel control settings):
-```env
-VITE_SOCKET_URL="http://localhost:3000"
+# 4. Run (dev)
+npm run dev
 ```
 
-### Backend Variables
-Configure these variables in your root workspace `.env` file for the Express/Socket engine:
-```env
-PORT=3000
-NODE_ENV="development"
+Open `http://localhost:3000`. Sign up, verify via the emailed link (or the link printed in the server console when no mail provider is configured), and sign in with the seeded admin (`admin@synapse.ai` / `Password@123` by default).
 
-# Cryptographic Token Seeds
-JWT_ACCESS_SECRET="synapse-ai-access-quantum-secret-2026"
-JWT_REFRESH_SECRET="synapse-ai-refresh-quantum-secret-2026"
-JWT_SECRET="synapse-ai-exclusive-quantum-secret-2026"
+| Script | What it does |
+|---|---|
+| `npm run dev` | `tsx server.ts` — Express + Vite middleware + sockets, with HMR on the client |
+| `npm run build` | `vite build` (client) **and** `esbuild` (server → `dist/server.cjs`) in one command |
+| `npm run start` | Runs the production server bundle |
+| `npm run lint` | `tsc --noEmit` — the type-check gate |
+| `npm test` | Node test runner over `server/*.test.ts` (83 tests) |
 
-# CORS Whitelist Settings
-CLIENT_URL="http://localhost:3000"
+> **Note:** `npm run dev` has no file watcher on the server — backend changes need a manual restart. The client hot-reloads.
 
-# MongoDB Database Connection URI
-MONGO_URI="mongodb+srv://admin-user:StrongPassword@cluster.mongodb.net/MindSync"
+---
 
-# LLM Integrations
-GEMINI_API_KEY="your_api_key"
+## 🔐 Environment variables
 
-# Startup Autoseed Configuration
-ADMIN_NAME="System Super Administrator"
-ADMIN_EMAIL="admin@synapse.ai"
-ADMIN_PASSWORD="Password@123"
+Full documentation is in `.env.example`. The essentials:
+
+**AI providers** — every model is gated on its own key; a missing key degrades only that model's card.
+
+| Variable | Unlocks |
+|---|---|
+| `GEMINI_API_KEY` | Gemini 2.5 Flash ([Google AI Studio](https://aistudio.google.com/apikey), free) |
+| `GROQ_API_KEY` | GPT-OSS 120B, GPT-OSS 20B, Qwen3.8 27B ([Groq](https://console.groq.com/keys), free 30 RPM) |
+| `MISTRAL_API_KEY` | Mistral Small (optional) |
+| `NVIDIA_API_KEY` | DeepSeek R1 (optional) |
+
+**Core**
+
+| Variable | Purpose |
+|---|---|
+| `MONGODB_URI` | Atlas or local MongoDB. Blank → local JSON persistence mode |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` / `JWT_SECRET` | Token signing (fallback chains: access/refresh secret → `JWT_SECRET`) |
+| `CLIENT_URL` | CORS origin |
+| `ADMIN_NAME` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` | The startup admin seeder |
+
+**Email** (all optional) — providers tried in order: **Brevo SMTP → Resend API → Gmail SMTP**. With none configured the app runs in **"no mail" mode**: verification and reset links are returned in the API response and printed to the server console, so the flows are still testable end to end.
+
+| Variable | Purpose |
+|---|---|
+| `BREVO_USER` / `BREVO_PASS` / `BREVO_HOST` / `BREVO_PORT` | Brevo SMTP relay (recommended; port 2525 sidesteps cloud SMTP egress blocks) |
+| `MAIL_FROM_ADDRESS` | **Required for Brevo** — the `…@smtp-brevo.com` login is not a valid sender |
+| `RESEND_API_KEY` / `RESEND_FROM` | Resend over plain HTTPS |
+| `SMTP_USER` / `SMTP_PASS` | Gmail fallback (use an App Password, not your account password) |
+| `MAIL_FROM_NAME` / `APP_URL` | Display name and the base URL links point at |
+
+---
+
+## 🔑 Auth, verification & sessions
+
+**Dual tokens, rotated**
+
+| Token | Lifetime | Stored |
+|---|---|---|
+| Access | **15 min** | in-memory Zustand only — never localStorage, never a cookie |
+| Refresh | **7 days** | `HttpOnly` cookie; `secure` tracks the request scheme, `sameSite` none/lax |
+
+Refresh rotation is reuse-detecting: a presented refresh token that doesn't match the stored one **nulls every stored refresh token for that user and clears the cookie**, killing all other sessions. On the client, `secureFetch` transparently rotates on a 401 and retries the original request — so an expired access token is invisible to the user.
+
+**Email verification**
+- Registering creates an **unverified** account and mints a token: 32 random bytes, **SHA-256 hashed** server-side (the raw token never touches the database), valid for **24 hours**.
+- Signup lands on a **"verify your email"** screen; the deep link activates on open and **auto-redirects to login** after a short confirmation.
+- Unverified users are blocked at login with **403 + a fresh re-issued link**, so a stale link can never dead-end an account. The notice persists across refresh and navigation.
+- Verification is the law on the write surface too: workspace-mutating routes sit behind a second `requireVerifiedAuth` gate, because tokens outlive verification.
+
+**Password reset** — same token engineering, **1-hour** lifetime, always-200 response (never reveals whether an address is registered).
+
+**Sequencing matters:** registration does *not* flip the loading spinner into a session — the account must be confirmed first, so the auth portal unmounts and remounts cleanly rather than leaving a half-logged-in UI.
+
+**Socket handshakes** verify the access JWT and drop the socket into a personal `user:<id>` room, which is how invitation events reach exactly one recipient.
+
+---
+
+## 👥 Workspaces, invitations & leaving
+
+**Workspaces** are the tenancy boundary. `memberIds` **includes the owner**, so its length is the true headcount. Every workspace is created with one default channel, **🛰️ Central Brainstorm**. Membership is checked on every route *and* re-checked when a socket tries to join a room — a conversation id is treated as a bearer secret, so a room's history requires belonging to its workspace.
+
+**Admins see every workspace** for oversight; everyone else sees only what they own or belong to. Left workspaces stay visible to an admin, badged **Left** with a disabled **Enter** — rejoining is by invitation only.
+
+### Invitations are requests, not additions
+
+```text
+owner invites you ──▶ invitation doc (status: pending)
+                          │
+        ┌─────────────────┴──────────────────┐
+        ▼                                    ▼
+   you ACCEPT                           you DECLINE
+   → status: accepted                   → status: rejected
+   → your id pushed into memberIds      → rejection tally for this
+     (de-duped against double-taps)       (workspace, you) increments
+                                          → 5 declines and this workspace
+                                             can never invite you again
 ```
 
----
+- The cap is `MAX_INVITATION_REJECTIONS = 5`, **per workspace per invitee** — rejecting the "Design Review" room five times says nothing about "Q3 Planning".
+- Rejections are **never deleted**; the tally is a live `countDocuments` over rejected documents, so it survives re-invites and is fully auditable. Each declined re-invite counts.
+- Inviting an unknown email **auto-registers** an unverified account with a password nobody knows, so it can only be entered after the mailbox is verified and a password is set via reset.
+- The whole flow is targeted: the invitee gets an `invitation-received` event on their personal `user:<id>` room, and the pending section of their workspace hub is where they decide.
 
-## 🚢 12. Deployment Guide
+### Leaving
 
-### Vercel Deployment (Frontend Client SPA)
-Vercel is optimized to host your compiled single-page React assets:
-1.  Connect your GitHub repository to Vercel.
-2.  Configure the build framework to **Vite**.
-3.  Set the **Build Command** to: `npm run build`
-4.  Set the **Output Directory** to: `dist`
-5.  Inject the Environment variables:
-    *   `VITE_SOCKET_URL` -> Deployed Backend Socket Server URL.
+| Caller is a… | What happens |
+|---|---|
+| **Member** | Removed from the roster immediately |
+| **Owner with collaborators** | **409 `requiresTransfer`** + a `candidates` list; re-issue the call with `newOwnerId` and the transfer + leave happen in **one request** |
+| **Sole owner** | **409 `soleOwner`** — transfer to a collaborator first, or delete the workspace |
 
-### Railway or Render Deployment (Backend HTTP / Socket Server)
-Run your backend in a persistent container environment supporting active WebSocket handshakes:
-1.  Link your repository in Railway or Render.
-2.  Set the environment properties to use **Node.js 22 LTS**.
-3.  Set the **Build Command** to compile assets:
-    ```bash
-    npm run build
-    ```
-4.  Configure the **Start Command** to run the bundled server:
-    ```bash
-    npm run start
-    ```
-5.  Add your production environment variables (e.g. `MONGO_URI`, `JWT_ACCESS_SECRET`, `GEMINI_API_KEY`). Ensure `PORT` is assigned to `3000` or dynamic cloud ports.
-
-### MongoDB Atlas Deployment
-1.  Create a Free Tier M0 Cluster in MongoDB Atlas.
-2.  Add a database user with read/write permissions for your collection.
-3.  Under **Network Access**, whitelist your server's deployment IP addresses (or allow access from anywhere `0.0.0.0/0` if hosting on dynamic container providers like Railway).
-4.  Copy the connection string and assign it to the `MONGO_URI` variable on your server environment.
-
-### Production Security Checklist:
-*   **Production Environment Setup:** Set `NODE_ENV` to `"production"`.
-*   **CORS Config:** Set `CLIENT_URL` to your production frontend domain.
-*   **Secure Cookies:** Refresh tokens are served with `secure: true` and `sameSite: 'none'`. This configuration requires active HTTPS connections to register cookies successfully.
-*   **HTTPS Requirements:** Ensure all routes run over secure HTTPS/WSS channels to prevent credential sniffing.
+The backend returns both 409 shapes deliberately, so the UI can present a successor picker rather than a bare error string.
 
 ---
 
-## 🔒 13. Security Implementation
+## 📡 Realtime engine
 
-MindSync is hardened against modern web application vulnerabilities:
+Socket.IO attached to the same HTTP server, with room isolation by workspace.
 
-*   **JWT Security:** Implements stateless validation for request handling. Access tokens are kept in-memory to prevent browser storage sniffing.
-*   **Refresh Token Rotation:** Employs a rotation model where the server replaces the old refresh token with a new one upon session refresh. If a token reuse conflict is detected, the database revokes the active session keys instantly to lock out unauthorized access.
-*   **HttpOnly Cookies:** Restricts cookie access to server HTTP communications, securing tokens against XSS cross-site scripting vulnerabilities.
-*   **Helmet:** Configures HTTP headers to protect against common attacks, such as clickjacking and MIME-type vulnerabilities.
-*   **Rate Limiting:** Protects endpoints from brute-force attempts and DDoS traffic by enforcing request thresholds:
-    ```typescript
-    const globalLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000,
-      max: 3000,
-      message: { error: 'Too many requests' }
-    });
-    ```
-*   **RBAC:** Standard routes, database seeding, and administrative panels are restricted using validation middlewares:
-    ```typescript
-    export function adminOnly(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-      if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin role required.' });
-      next();
-    }
-    ```
-*   **Socket Auth:** WebSocket connections are authenticated during the handshake phase, rejecting unauthenticated clients.
-*   **Protected APIs:** Server routes verify access tokens before executing logic or database operations.
+**Presence is in-memory and deduped by user id** — three tabs is one presence row. The sidebar roster **merges presence onto the full member directory**, because presence only knows about live sockets; without the merge, people would vanish from the list the moment they went offline. Online members sort first; roster order is preserved within each group so the owner stays where the member list put them. A presence row with no directory entry is still shown — someone in the room is someone in the room.
+
+**Reliability is built in, not bolted on:**
+
+- **Stream watchdog** — a dropped socket can take a stream's terminal event with it, leaving a card frozen mid-sentence forever while the finished text sits in the database. The watchdog tracks a heartbeat per `(messageId, modelKey)`, and any card still `streaming` that has been quiet past `STREAM_STALL_MS` (20s) is re-read from the server on an 8s interval and after every reconnect. It only applies a **terminal** server state — a still-`streaming` server row is proof the stream is alive, so the quiet window is re-armed and the live chunks are left untouched. Reconciliation turns "stuck forever, refresh to see it" into self-healing.
+- **Transparent reconnection** — auth errors rotate the token and reconnect with backoff, capped separately for dead sessions (5) versus transient backend trouble (20) so a backend outage never burns your session budget.
+- **Startup reaping** — `reapInterruptedStreams()` on boot clears any row left mid-flight by a killed process.
+- **Idempotency everywhere it matters** — double-accepts, re-approves, duplicate socket echoes and double-leave are all no-ops by construction.
 
 ---
 
-## 🚀 14. Performance Optimizations
+## 🤖 AI models & streaming
 
-To maintain responsiveness under collaborative loads, the platform implements several optimization strategies:
+Seven models are registered in `AI_MODELS` (`server/ai.ts`), spanning four labs and two transport styles. The default comparison set — `['gemini-2.5-flash', 'gpt-oss-120b', 'qwen3.8-27b']` — runs on **two free keys**:
 
-*   **Lazy Loading:** React pages and heavy administrative modules are loaded dynamically using `React.lazy()` and `Suspense`, reducing the initial payload size.
-*   **React Query Caching:** Leverages TanStack Query to cache REST payloads. This prevents redundant database queries by reusing valid cache states.
-*   **Optimized Rerenders:** Integrates selector functions inside Zustand stores:
-    ```typescript
-    const currentUser = useStore(state => state.auth.user);
-    ```
-    This ensures that components only re-render when their specific slice of the state changes, preventing global layout redraws.
-*   **MongoDB Indexing:** Optimizes query execution times by applying indices on highly queried collection fields:
-    ```typescript
-    UserSchema.index({ email: 1 });
-    WorkspaceSchema.index({ ownerId: 1, memberIds: 1 });
-    ConversationSchema.index({ workspaceId: 1 });
-    MessageSchema.index({ conversationId: 1, createdAt: 1 });
-    ```
-*   **Pagination:** Implements pagination on message histories, loading history records in segments to limit memory overhead:
-    ```typescript
-    const docs = await MessageModel.find({ conversationId })
-      .sort({ createdAt: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
-    ```
-*   **Socket Optimization:** Debounces collaborative typing events and prompt updates, reducing network packet overhead.
+| Model | Provider | Transport | Gated by | Free tier |
+|---|---|---|---|---|
+| **Gemini 2.5 Flash** | Google | native SDK streaming | `GEMINI_API_KEY` | Yes |
+| **GPT-OSS 120B** | Groq | OpenAI-compat SSE | `GROQ_API_KEY` | 30 RPM |
+| **Qwen3.8 27B** | Groq | OpenAI-compat SSE | `GROQ_API_KEY` | 30 RPM |
+| GPT-OSS 20B | Groq | OpenAI-compat SSE | `GROQ_API_KEY` | 30 RPM |
+| Llama 3.3 70B | Groq | OpenAI-compat SSE | `GROQ_API_KEY` | Paid plan |
+| Mistral Small | Mistral | OpenAI-compat SSE | `MISTRAL_API_KEY` | Experiment tier |
+| DeepSeek R1 | NVIDIA | OpenAI-compat SSE | `NVIDIA_API_KEY` | 40 RPM |
 
----
+**Streaming** fans out per model: each card receives its own chunk stream and terminal event, so one model's failure never stalls the others. The chat path fans out chunks as they arrive.
 
-## 🗺️ 15. Future Roadmap
+**Resilience, per transport:**
+- **Gemini** — a model cascade (`gemini-2.5-flash` → `gemini-3.1-flash-lite` → `gemini-flash-latest`, ordered by measured time-to-first-token), one retry with backoff on transient 429/503s, and a clearly-labelled offline fallback when the whole cascade is down.
+- **OpenAI-compatible** — a 120s abort timeout so a stalled upstream can't hang a card forever, and immediate honest failure otherwise.
 
-- [ ] **Redis scaling:** Integrate a Redis Pub/Sub adapter to sync socket rooms across multiple backend nodes behind load balancers.
-- [ ] **OpenAI/Claude integrations:** Add native API integrations with OpenAI's GPT-4o and Anthropic's Claude 3.5 Sonnet to support broader model comparisons.
-- [ ] **Kubernetes deployment:** Package the application into Docker containers and configure Kubernetes files to support automated scaling.
-- [ ] **AI memory system:** Add semantic search capabilities to saved prompt responses using MongoDB Vector Search or PGVector.
-- [ ] **Enterprise billing:** Integrate Stripe subscriptions to support tiered billing structures, billing cycles, and team usage limits.
-- [ ] **Team organizations:** Expand workspaces to support multi-team enterprise directories, custom permissions, and domain-based access rules.
+The strict counterpart used for anything the room treats as a **record** (decision summaries) **never** falls back to the offline generator — a fabricated paragraph is fine for a chat reply, but indistinguishable from a real one in a summary. It returns `null` instead.
+
+**Grounding:** Gemini 2.5 Flash answers with Google Search enabled, so current facts come from the live web rather than frozen training data.
+
+**Context engineering.** Every prompt is composed server-side from the room's own record — recent messages, relevance-ranked established claims (each attributed to its source model), decision memory, and a rules header that forbids invention and treats quoted history as the only source of truth. This is what gives the room cross-model persistent memory: a claim mined from model A on turn 1 is injected into the context models B, C and D all receive on turn 2.
 
 ---
 
-## 🎓 16. Resume Value Section
+## 📊 Admin & telemetry
 
-### What This Project Demonstrates:
-*   **MERN Expertise:** Advanced full-stack integration of MongoDB, Express, React, and Node.js with strict type-safety across layers.
-*   **Realtime Architecture:** Real-time state synchronization, handling room isolation, connection failures, and multiplayer conflict resolutions.
-*   **AI Integration:** Native streaming integrations with LLM interfaces, managing comparative streaming states and parsing markdown payloads.
-*   **SaaS Engineering:** Designing scalable databases, managing clean environment variables, and configuring single-package production builds.
-*   **RBAC:** Implementing role-based route protection on both the client (React guards) and server (Express gateway middlewares).
-*   **Production Authentication:** Secure session management using Access/Refresh token rotation and secure cookie configurations.
-*   **Admin Systems:** Implementing telemetry monitoring dashboards, interactive charts, and system audit logs.
+Two admin surfaces: a **full-screen panel** (diagnostic console, collaborator accounts, workspaces, AI telemetry, audit, health) and a **routed `/admin` section** with its own layout.
 
----
-
-## 👤 17. Author Section
-
-*   **Lead Maintainer:** `Naresh Kamarthy`
-*   **Professional Website:** [Naresh Kamarthy Portfolio](https://naresh-kamarthy-portfolio.vercel.app)
-*   **LinkedIn Profile:** [linkedin.com/in/naresh-kamarthy-aa1239130](https://www.linkedin.com/in/naresh-kamarthy-aa1239130)
+- **Dashboards** — DAU, total workspaces, AI queries today, core response latency, plus Recharts visualizations for daily AI usage, user growth, workspace activity and model popularity.
+- **User management** — search, role and verification filters, paginated. Block / unblock (emitting `session-revoked` to boot the user's live sockets), role elevation, manual email verification (burning any outstanding token), hard delete. Self-blocking and self-deletion are refused.
+- **Workspace oversight** — every workspace with owner, member / channel / saved counts, and global deletion.
+- **Audit logs** — every auth event, role change, block, workspace and decision lifecycle action, with IP tracking and an action filter.
+- **AI telemetry** — the `/admin/ai-models` endpoint reports each registered model's provider, transport, the *name* of the env var it needs (never the key), its free tier and whether it is currently configured.
 
 ---
 
-## 📄 18. License
+## 🎨 Brand & theming
 
-Distributed under the MIT License. See [LICENSE](file:///C:\Users\Admin\Desktop\AI-Workspace_MERN\MindSync-realtime-platform\LICENSE) for more information.
+MindSync's mark is a **synapse node graph**: a central hub broadcasting spokes to six unequal satellites, linked to each other by a ring — the room's center of gravity and the network around it, drawn in an indigo gradient.
+
+The palette is **indigo / violet on slate**, with three full themes switchable live (and persisted in `localStorage` under `mindsync-theme`, with a one-way read of the legacy `collabz-theme` key so returning users keep their choice through the rebrand):
+
+| Theme | Character | Accent |
+|---|---|---|
+| **Linen** (light) | Cool paper, bright surfaces | Indigo `#4f46e5` |
+| **Obsidian** (dark) | Near-black slate, crisp text | Periwinkle `#818cf8` |
+| **Nebula** | Deep violet dusk, soft glow | Violet `#a78bfa` |
+
+Themes are pure CSS custom properties — `:root.dark` and `:root.nebula` override the base tokens by specificity, so any utility referencing `var(--color-*)` flips automatically. All text/surface pairs are tuned to **WCAG AA** contrast or better, including a `--color-on-ember` flip from white to dark indigo on the accent in dark themes. The pre-React loading screen in `index.html` reads the theme key before paint, so there is no flash of the wrong mode.
+
+---
+
+## 🛡️ Security
+
+- **JWT** access (15 min) + rotating refresh (7 d) with reuse detection that revokes every session.
+- **Access token in memory only**; refresh in an `HttpOnly` cookie whose `secure` flag tracks the real request scheme (`trust proxy` is set, so it works behind load balancers and doesn't break on localhost).
+- **HttpOnly cookies** keep the refresh token out of reach of XSS.
+- **Email verification** before first login, with a second gate on the workspace write surface.
+- **Password hashing** with bcrypt (salt rounds 10) everywhere a password is set.
+- **Helmet** headers; **rate limiting** — a global limiter (3000 / 15 min) and a stricter auth limiter (100 / 15 min) on login and register.
+- **Zod** validation on every request body; conversation ids are scoped to workspace membership so a leaked id grants nothing.
+- **RBAC** — `requireAuth`, `requireVerifiedAuth`, `requireRole('admin')` and `adminOnly` middleware; socket handshakes verify the JWT and re-check membership before a socket may join a workspace room.
+- **Separate JWT secrets** for access and refresh, so a leaked access secret cannot forge refresh tokens.
+- **Keys never reach the browser** — the admin model report exposes only the *name* of each env var.
+
+---
+
+## 🧪 Testing
+
+```bash
+npm test     # 83 tests, Node's built-in runner over server/*.test.ts
+npm run lint # tsc --noEmit — the type-check gate
+```
+
+The suite pins the contracts that are easy to regress:
+
+- **Evidence gate** — blocker kinds, the AI-evidence exclusion, and that a direct API call skipping the UI is refused identically (`decisionContext.test.ts`).
+- **Invitations** — that rejections accumulate **per workspace**, that a cross-workspace rejection does not count, and that the cap drives the invite refusal (`invitation.test.ts`).
+- **Workspace leave** — the owner-transfer + leave write, sole-owner handling, and that re-leaving is stable (`workspaceLeave.test.ts`).
+- **Evidence adapter** — newest-first ordering, batched multi-claim reads, per-claim count tallies, room scoping and cleanup contracts (`evidence.db.test.ts`, `evidence.test.ts`).
+- **Auth & mail** — validators, the mailer provider chain and the no-mail fallback (`validators.test.ts`, `mailer.test.ts`).
+- **Context** — room-context composition (`context.test.ts`).
+
+---
+
+## 🚢 Deployment
+
+The build produces both artifacts in one command — the client bundle via Vite and the server via esbuild to `dist/server.cjs`.
+
+**Render / Railway (or any Node host)**
+
+1. Connect the repo. Set the runtime to **Node 22**.
+2. **Build command:** `npm run build` · **Start command:** `npm run start`
+3. Set environment variables — at minimum `MONGODB_URI`, the `JWT_*` secrets, `CLIENT_URL`, your model keys, and `ADMIN_*`. For email, add the `BREVO_*` (plus a verified `MAIL_FROM_ADDRESS`) or `RESEND_*` block.
+4. Ensure the host allows outbound SMTP (port 2525) if using Brevo — many cloud hosts block 465/587, which is exactly why Brevo's relay port is the default.
+
+**MongoDB Atlas** — free M0 tier is sufficient. Add a database user, whitelist the host's egress IPs (or `0.0.0.0/0` for dynamic cloud hosts), and put the connection string in `MONGODB_URI`.
+
+**Static client** — not required. The server serves the built client itself with an SPA fallback, so a single service hosts everything. To split it, point a CDN at `dist/` and set `CLIENT_URL` to its origin.
+
+**Production checklist:** `NODE_ENV=production` · `CLIENT_URL` = your frontend origin · HTTPS/WSS end to end (required for the `Secure` + `SameSite=None` refresh cookie) · rotate the default `JWT_*` secrets · confirm your Brevo sender address is verified.
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] **Redis adapter** — sync socket rooms across multiple backend nodes behind a load balancer.
+- [ ] **More providers** — OpenAI and Anthropic native APIs.
+- [ ] **Vector search** — semantic retrieval over saved responses and evidence.
+- [ ] **Organizations** — multi-team directories and domain-based access.
+- [ ] **Usage billing** — tiered plans and per-workspace quotas.
+
+---
+
+## 📄 License
+
+Distributed under the [MIT License](./LICENSE) · Copyright © 2026
